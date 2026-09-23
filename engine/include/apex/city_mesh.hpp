@@ -6,6 +6,10 @@
 
 namespace apex {
 
+struct Rgb {
+    float r, g, b;
+};
+
 // Surface kinds; shaders/include/building_surface.glsl switches on these.
 enum class SurfaceMaterial : std::uint8_t {
     Facade = 0,      // procedural windows, style by district

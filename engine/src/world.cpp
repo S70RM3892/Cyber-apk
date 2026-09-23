@@ -15,6 +15,24 @@ namespace {
 Rgb mix(Rgb a, Rgb b, float t) { return {a.r + (b.r - a.r) * t, a.g + (b.g - a.g) * t, a.b + (b.b - a.b) * t}; }
 }  // namespace
 
+// Mirror of signs_common.glsl zone_color: 4/8 primary, 3/8 secondary, 1/8 warm white.
+Rgb zone_color(std::uint32_t zone, std::uint32_t h) {
+    static constexpr Rgb kZones[4][2] = {{{1.0f, 0.07f, 0.1f}, {0.05f, 0.85f, 1.0f}},
+                                         {{1.0f, 0.85f, 0.15f}, {0.95f, 0.1f, 0.9f}},
+                                         {{1.0f, 0.12f, 0.45f}, {0.25f, 0.45f, 1.0f}},
+                                         {{1.0f, 0.45f, 0.06f}, {0.15f, 0.95f, 0.8f}}};
+    const std::uint32_t r = h & 7u;
+    if (r == 7u) return {1.0f, 0.82f, 0.68f};
+    return kZones[zone & 3u][r < 4u ? 0 : 1];
+}
+
+std::uint32_t sign_zone(float x, float y) {
+    // Zones follow a coarse 400 m grid, independent of the city seed so the mirror stays
+    // simple; neighbouring cells hash to different pairs.
+    const auto cx = static_cast<std::int64_t>(std::floor(x / 400.0f)), cy = static_cast<std::int64_t>(std::floor(y / 400.0f));
+    return static_cast<std::uint32_t>(city::hash64(static_cast<std::uint64_t>(cx) * 73856093u ^ static_cast<std::uint64_t>(cy) * 19349663u) & 3u);
+}
+
 float unit(std::uint64_t h) { return static_cast<float>(h >> 40) * (1.0f / 16777216.0f); }
 
 std::uint64_t building_hash(const city::Building& b) {
@@ -96,7 +114,12 @@ void place_signs(const city::Building& b, std::vector<SignInstance>& out) {
         h = city::hash64(h);
         return unit(h);
     };
-    auto pack = [](SignStyle st, std::uint32_t text) { return static_cast<std::uint32_t>(st) | (text << 8); };
+    // Colour zone of the district (bits 16-23): each district keeps two dominant neon
+    // colours so neighbouring areas read as distinct places.
+    const std::uint32_t zone = sign_zone(b.x, b.y);
+    auto pack = [zone](SignStyle st, std::uint32_t text) {
+        return static_cast<std::uint32_t>(st) | (text << 8) | (zone << 16);
+    };
     // Pick a sign string: mostly Japanese in the older districts, brand names downtown.
     const bool downtown = b.district == city::District::Corporate;
     auto pick_text = [&](bool prefer_japanese) {
@@ -374,19 +397,20 @@ void place_props(const city::Building& b, std::vector<PropInstance>& props, std:
 
 PointLight sign_light(const SignInstance& s) {
     const std::uint32_t h = s.seed;
-    Rgb c = neon_color(shader_hash(h));
+    const std::uint32_t zone = s.zone();
+    Rgb c = zone_color(zone, shader_hash(h));
     float emit = 0.8f;         // average radiance over the sign's area
     float out = 0.8f, dz = 0.0f;  // light position: in front of the face, and vertical shift
     const float area = s.width * s.height;
     switch (s.kind()) {
         case SignStyle::NeonText:  // letters only, lighting the roof they stand on
-            if (shader_hash_f(h ^ 0x7eu) < 0.8f) c = neon_warm(h);
+            if (shader_hash_f(h ^ 0x7eu) < 0.8f) c = zone_color(zone, 0u);  // zone's primary
             emit = 1.1f;
             out = 0.0f;
             dz = -s.height * 0.45f;
             break;
         case SignStyle::Blade:  // two-sided, sticks out of the wall
-            if (shader_hash_f(h ^ 0x7eu) < 0.55f) c = neon_warm(h);
+            if (shader_hash_f(h ^ 0x7eu) < 0.55f) c = zone_color(zone, 0u);
             emit = 0.9f;
             out = 0.0f;
             break;
@@ -400,7 +424,7 @@ PointLight sign_light(const SignInstance& s) {
             out = 0.25f * std::sqrt(area);
             break;
         case SignStyle::Rooftop:
-            c = mix(c, neon_color(shader_hash(h ^ 0x51u)), 0.5f);
+            c = mix(c, zone_color(zone, shader_hash(h ^ 0x51u)), 0.5f);
             emit = 0.6f;
             out = 0.2f * std::sqrt(area);
             break;

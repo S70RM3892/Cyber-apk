@@ -71,7 +71,17 @@ void main()
             vec2 huv = bc.xy / bc.w * 0.5 + 0.5;
             vec2 edge = min(huv, 1.0 - huv);
             hit_weight = smoothstep(0.0, 0.08, min(edge.x, edge.y)) * (1.0 - float(i) / float(params.max_steps));
-            hit_color = mix(hit_color, texture(scene_color, huv).rgb, hit_weight);
+            // Rough wet asphalt smears the reflection; puddles stay sharp. Blur by
+            // spreading 4 taps over a footprint that grows with roughness and distance.
+            float spread = mat.g * mat.g * 0.08 * min(float(i) + 1.0, 12.0) / 12.0;
+            vec3 refl = texture(scene_color, huv).rgb;
+            if (spread > 0.002) {
+                vec2 o = vec2(spread, spread * frame.viewport.x * frame.viewport.w);
+                refl = (texture(scene_color, huv + vec2(o.x, 0.3 * o.y)).rgb + texture(scene_color, huv - vec2(o.x, 0.3 * o.y)).rgb +
+                        texture(scene_color, huv + vec2(-0.3 * o.x, o.y)).rgb + texture(scene_color, huv + vec2(0.3 * o.x, -o.y)).rgb +
+                        refl * 2.0) / 6.0;
+            }
+            hit_color = mix(hit_color, refl, hit_weight);
             break;
         }
     }
@@ -81,6 +91,6 @@ void main()
     float fresnel = 0.02 + 0.98 * pow(1.0 - cos_t, 5.0);
     float strength = reflectivity * mix(0.3, 1.0, fresnel);
     // Rough (non-puddle) wet asphalt smears the reflection: approximate by dimming.
-    strength *= mix(1.0, 0.45, smoothstep(0.05, 0.35, mat.g));
+    strength *= mix(1.0, 0.55, smoothstep(0.05, 0.5, mat.g));
     out_color = vec4(base + hit_color * strength, 1.0);
 }

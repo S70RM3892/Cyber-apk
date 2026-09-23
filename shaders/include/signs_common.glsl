@@ -16,6 +16,16 @@ layout(location = 1) out vec4 out_material;
 
 const uint kWallPanel = 0u, kBlade = 1u, kRooftop = 2u, kScreen = 3u, kNeonText = 4u;
 
+// District colour zones (world.cpp zone_color): two dominant colours per area.
+vec3 zone_color(uint zone, uint h)
+{
+    const vec3 z[8] = vec3[8](vec3(1.0, 0.07, 0.1), vec3(0.05, 0.85, 1.0), vec3(1.0, 0.85, 0.15), vec3(0.95, 0.1, 0.9),
+                              vec3(1.0, 0.12, 0.45), vec3(0.25, 0.45, 1.0), vec3(1.0, 0.45, 0.06), vec3(0.15, 0.95, 0.8));
+    uint r = h & 7u;
+    if (r == 7u) return vec3(1.0, 0.82, 0.68);
+    return z[(zone & 3u) * 2u + (r < 4u ? 0u : 1u)];
+}
+
 // Neon tube response for a glyph distance d (cell units, + inside): a hot, slightly
 // white core with a coloured halo. `aa` is the pixel footprint in cell units.
 vec3 neon_glyph(float d, float aa, vec3 col, float intensity, out float coverage)
@@ -185,8 +195,9 @@ void main()
     if (style == kNeonText) discard;
 #endif
 
-    vec3 col = neon_color(hash_u(h));
-    vec3 col2 = neon_color(hash_u(h ^ 0x51u));
+    uint zone = (s.style >> 16u) & 0xFFu;
+    vec3 col = zone_color(zone, hash_u(h));
+    vec3 col2 = zone_color(zone, hash_u(h ^ 0x51u));
     // HDR level of the tube cores: bright enough to bloom, low enough that the letter
     // shapes survive the tone curve (the target look has readable neon text).
     float intensity = 3.0 + 2.5 * hash_f(h ^ 0x33u);
@@ -203,7 +214,7 @@ void main()
 
     if (style == kNeonText) {
         // Big rooftop lettering is red/pink in 80% of cases, like the target look.
-        if (hash_f(h ^ 0x7eu) < 0.8) col = neon_warm(h);
+        if (hash_f(h ^ 0x7eu) < 0.8) col = zone_color(zone, 0u);  // the zone's primary
         float d = text_distance(text, uv.x, uv.y, false);
         float aa = glyph_aa(s.size.y);
         float cov;
@@ -232,7 +243,7 @@ void main()
         emissive = bg * 1.6 + neon_glyph(d, glyph_aa(s.size.y * 0.5), vec3(1.0, 0.95, 0.9), 3.0, cov);
         emissive += border * col * intensity;
     } else if (style == kBlade) {
-        if (hash_f(h ^ 0x7eu) < 0.55) col = neon_warm(h);
+        if (hash_f(h ^ 0x7eu) < 0.55) col = zone_color(zone, 0u);
         // Vertical Japanese text, one glyph per cell down the blade.
         uint n = max(sign_string_length(text), 1u);
         float inner = 0.35 / (float(n) * 0.92 + 0.35) * 0.5;  // top/bottom margin (see place_signs)

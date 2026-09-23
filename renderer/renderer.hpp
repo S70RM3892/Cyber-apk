@@ -30,7 +30,7 @@ struct RenderSettings {
     float rain = 1.0f;
     float fog_density = 0.0045f;
     std::uint32_t traffic_count = 780;     // 320 fly, 260 side streets, 200 expressways (traffic.vert)
-    std::uint32_t pedestrian_count = 700;
+    std::uint32_t pedestrian_count = 1400;
 };
 
 struct OutputTarget {

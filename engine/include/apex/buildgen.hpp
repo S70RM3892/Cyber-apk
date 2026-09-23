@@ -36,9 +36,6 @@ struct CableAnchor {
 void build_cables(std::span<const CableAnchor> anchors, CityMesh& out);
 
 // Mirrors of the shader palettes in shaders/include/city_common.glsl.
-struct Rgb {
-    float r, g, b;
-};
 Rgb neon_color(std::uint32_t h);
 Rgb neon_warm(std::uint32_t h);
 

@@ -44,6 +44,7 @@ struct SignInstance {
 
     SignStyle kind() const { return static_cast<SignStyle>(style & 0xFF); }
     std::uint32_t text() const { return (style >> 8) & 0xFF; }
+    std::uint32_t zone() const { return (style >> 16) & 0xFF; }  // colour zone (zone_color)
 };
 static_assert(sizeof(SignInstance) == 32);
 
@@ -109,6 +110,10 @@ void place_props(const city::Building& b, std::vector<PropInstance>& props, std:
 
 // Deterministic sign placement for one building (exposed for tests).
 void place_signs(const city::Building& b, std::vector<SignInstance>& out);
+
+// District colour zones: two dominant neon colours per ~400 m area.
+std::uint32_t sign_zone(float x, float y);
+Rgb zone_color(std::uint32_t zone, std::uint32_t h);
 
 // The light a sign casts on its surroundings (colour matches shaders/include/signs_common.glsl).
 PointLight sign_light(const SignInstance& s);

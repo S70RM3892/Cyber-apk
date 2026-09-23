@@ -55,7 +55,10 @@ void main()
 
     float puddle = smoothstep(0.52, 0.62, fbm(p * 0.12 + 3.7)) * road;
     float rain = frame.fog.w;
-    float wet = mix(0.35, 0.95, puddle) * rain;
+    // Only puddles are mirrors; the rest of the street is a rough, blurry wet sheen with
+    // patchy roughness (0.1..0.6), like real rain-soaked asphalt.
+    float wet = mix(0.22, 1.0, puddle) * rain;
+    float rough = mix(mix(0.1, 0.6, value_noise(p * 0.35 + 11.0)), 0.03, puddle);
     albedo *= mix(1.0, 0.45, wet);  // wet surfaces darken
 
     // Street lamps (same lattice as the lamp-post geometry in streetlife.vert).
@@ -97,5 +100,5 @@ void main()
 
     out_color = vec4(apply_fog(lit, in_world_pos), 1.0);
     // Reflectivity drives the screen-space reflection strength in the resolve pass.
-    out_material = vec4(wet, mix(0.35, 0.04, puddle), ripple * 0.5 + 0.5);
+    out_material = vec4(wet, rough, ripple * 0.5 + 0.5);
 }
