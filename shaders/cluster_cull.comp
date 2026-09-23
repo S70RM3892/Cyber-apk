@@ -1,0 +1,121 @@
+#version 460
+// GPU-driven cluster culling (spec §4.1): frustum, backface-cone and HZB occlusion
+// culling in one pass, emitting indirect draws consumed by vkCmdDrawIndexedIndirectCount
+// (core in Vulkan 1.2).
+//
+// Frustum/cone math matches engine/src/cluster_cull.cpp (unit-tested on the host).
+// Sphere projection and the HZB test follow zeux/niagara (MIT), which implements
+// Mara & McGuire 2013, "2D Polyhedral Bounds of a Clipped, Perspective-Projected 3D Sphere".
+//
+// Conventions: view space is +Z forward; depth is reversed-Z with an infinite far
+// plane (depth = znear / z), and the HZB stores the MIN depth (= farthest) per texel.
+
+layout(local_size_x = 64) in;
+
+struct Cluster {
+    vec4 center_radius;     // world-space bounding sphere
+    vec4 cone_apex_cutoff;  // xyz: cone apex (world), w: cos(cone half-angle), >= 1 disables
+    vec4 cone_axis;         // xyz: cone axis (world)
+    uint index_offset;
+    uint index_count;
+    uint vertex_offset;
+    uint instance_id;
+};
+
+struct DrawIndexedIndirect {  // VkDrawIndexedIndirectCommand
+    uint index_count;
+    uint instance_count;
+    uint first_index;
+    int vertex_offset;
+    uint first_instance;
+};
+
+layout(set = 0, binding = 0) uniform CullData {
+    mat4 view;          // world -> view (+Z forward)
+    vec4 planes[6];     // world-space frustum planes, xyz inward normal, w distance
+    vec4 camera_pos;    // xyz
+    float p00, p11;     // projection[0][0], projection[1][1]
+    float znear;
+    uint cluster_count;
+    vec2 hzb_size;      // HZB mip 0 size in texels
+    uint occlusion_enabled;
+    uint pad0;
+} cull;
+
+layout(set = 0, binding = 1, std430) readonly buffer Clusters { Cluster clusters[]; };
+layout(set = 0, binding = 2, std430) writeonly buffer Draws { DrawIndexedIndirect draws[]; };
+layout(set = 0, binding = 3, std430) buffer DrawCount { uint draw_count; };
+// Previous frame's depth pyramid, sampled with a VK_SAMPLER_REDUCTION_MODE_MIN sampler.
+layout(set = 0, binding = 4) uniform sampler2D hzb;
+
+bool sphere_in_frustum(vec3 c, float r)
+{
+    bool inside = true;
+    for (int i = 0; i < 6; ++i)
+        inside = inside && (dot(cull.planes[i].xyz, c) + cull.planes[i].w >= -r);
+    return inside;
+}
+
+bool cone_backfacing(vec3 apex, vec3 axis, float cutoff)
+{
+    return cutoff < 1.0 && dot(normalize(apex - cull.camera_pos.xyz), axis) >= cutoff;
+}
+
+bool project_sphere(vec3 c, float r, out vec4 aabb)
+{
+    if (c.z < r + cull.znear)
+        return false;  // intersects the near plane: treat as visible
+    vec3 cr = c * r;
+    float czr2 = c.z * c.z - r * r;
+    float vx = sqrt(c.x * c.x + czr2);
+    float minx = (vx * c.x - cr.z) / (vx * c.z + cr.x);
+    float maxx = (vx * c.x + cr.z) / (vx * c.z - cr.x);
+    float vy = sqrt(c.y * c.y + czr2);
+    float miny = (vy * c.y - cr.z) / (vy * c.z + cr.y);
+    float maxy = (vy * c.y + cr.z) / (vy * c.z - cr.y);
+    aabb = vec4(minx * cull.p00, miny * cull.p11, maxx * cull.p00, maxy * cull.p11);
+    aabb = aabb.xwzy * vec4(0.5, -0.5, 0.5, -0.5) + vec4(0.5);  // clip -> uv
+    return true;
+}
+
+bool occluded(vec3 center_vs, float radius)
+{
+    vec4 aabb;
+    if (!project_sphere(center_vs, radius, aabb))
+        return false;
+    float width = (aabb.z - aabb.x) * cull.hzb_size.x;
+    float height = (aabb.w - aabb.y) * cull.hzb_size.y;
+    // Pick the mip where the footprint is ~1 texel so the 2x2 bilinear-min footprint covers it.
+    float level = floor(log2(max(width, height)));
+    float depth = textureLod(hzb, (aabb.xy + aabb.zw) * 0.5, level).x;
+    float depth_sphere = cull.znear / (center_vs.z - radius);  // nearest point of the sphere
+    return depth_sphere < depth;
+}
+
+void main()
+{
+    uint id = gl_GlobalInvocationID.x;
+    if (id >= cull.cluster_count)
+        return;
+
+    Cluster c = clusters[id];
+    vec3 center = c.center_radius.xyz;
+    float radius = c.center_radius.w;
+
+    bool visible = sphere_in_frustum(center, radius)
+                && !cone_backfacing(c.cone_apex_cutoff.xyz, c.cone_axis.xyz, c.cone_apex_cutoff.w);
+
+    if (visible && cull.occlusion_enabled != 0u) {
+        vec3 center_vs = (cull.view * vec4(center, 1.0)).xyz;
+        visible = !occluded(center_vs, radius);
+    }
+
+    if (visible) {
+        uint slot = atomicAdd(draw_count, 1u);
+        draws[slot].index_count = c.index_count;
+        draws[slot].instance_count = 1u;
+        draws[slot].first_index = c.index_offset;
+        draws[slot].vertex_offset = int(c.vertex_offset);
+        draws[slot].first_instance = c.instance_id;
+    }
+}
