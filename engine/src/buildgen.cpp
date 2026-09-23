@@ -236,8 +236,13 @@ public:
         const V2 ay{-ax.y, ax.x};
         return {c + ax * hx - ay * hy, c + ax * hx + ay * hy, c - ax * hx + ay * hy, c - ax * hx - ay * hy};
     }
-    void box(V2 c, V2 ax, float hx, float hy, float z0, float z1, M side, M top, M bottom) {
-        solid(rect(c, ax, hx, hy), z0, z1, side, top, bottom);
+    // Boxes are instanced (BoxInstance), not triangulated.
+    void box(V2 c, V2 ax, float hx, float hy, float z0, float z1, M side, M top, M bottom, bool open_back = false) {
+        if (hx <= 1e-3f || hy <= 1e-3f || z1 - z0 <= 1e-3f) return;
+        m_.boxes.push_back({c.x, c.y, z0, std::atan2(ax.y, ax.x), hx, hy, z1 - z0, 0.0f, id_,
+                            static_cast<std::uint32_t>(side) | (static_cast<std::uint32_t>(top) << 8) |
+                                (static_cast<std::uint32_t>(bottom) << 16),
+                            open_back ? BoxInstance::kOpenBack : 0u, 0u});
     }
     // Straight member between two points with a square (sides = 4) or round cross-section.
     void beam(Vec3 a, Vec3 b, float w, M mat, int sides = 4) {
@@ -371,13 +376,9 @@ FacadeGrid facade_grid(const city::Building& b, bool curtain) {
 
 // Box standing on a face, open at the back (against the wall): front, ends, top, bottom.
 void relief_box(Builder& g, const Face& f, float a0, float a1, float o0, float o1, float z0, float z1, M mat) {
-    const Vec3 c = at(f.point((a0 + a1) * 0.5f, (o0 + o1) * 0.5f), (z0 + z1) * 0.5f);
-    const V2 p00 = f.point(a0, o0), p10 = f.point(a1, o0), p01 = f.point(a0, o1), p11 = f.point(a1, o1);
-    g.quad_out(at(p01, z0), at(p11, z0), at(p11, z1), at(p01, z1), c, mat, a0, a1);  // front
-    g.quad_out(at(p00, z0), at(p01, z0), at(p01, z1), at(p00, z1), c, mat, a0, a0 + (o1 - o0));
-    g.quad_out(at(p10, z0), at(p11, z0), at(p11, z1), at(p10, z1), c, mat, a1, a1 + (o1 - o0));
-    g.quad_out(at(p00, z1), at(p10, z1), at(p11, z1), at(p01, z1), c, mat, a0, a1);  // top
-    g.quad_out(at(p00, z0), at(p10, z0), at(p11, z0), at(p01, z0), c, mat, a0, a1);  // bottom
+    // Local +y of a face-aligned box points into the wall: that face is never seen.
+    g.box(f.point((a0 + a1) * 0.5f, (o0 + o1) * 0.5f), f.t, (a1 - a0) * 0.5f, (o1 - o0) * 0.5f, z0, z1, mat, mat, mat,
+          true);
 }
 
 // Horizontal relief run along a face, broken around signs.
@@ -785,12 +786,20 @@ void block(Builder& g, const city::Building& b, const Massing& m, MeshDetail det
                     const int i1 = static_cast<int>(std::floor(f.half_len / pitch)) - 1;
                     for (float z = first; z + 1.0f < t.z1; z += fh)
                         for (int i = i0; i <= i1; ++i) {
-                            if (!rng.chance(0.18f)) continue;
                             const float a = (static_cast<float>(i) + 0.5f) * pitch;
-                            const Box3 bb = f.bounds(a - 0.45f, a + 0.45f, 0.0f, 0.6f, z + 0.1f, z + 0.75f);
-                            if (g.clear(bb))
-                                face_box(g, f, a - 0.42f, a + 0.42f, 0.0f, 0.55f, z + 0.12f, z + 0.72f, M::Concrete,
-                                         M::Concrete, M::Metal);
+                            if (rng.chance(0.32f)) {
+                                const Box3 bb = f.bounds(a - 0.45f, a + 0.45f, 0.0f, 0.6f, z + 0.1f, z + 0.75f);
+                                if (g.clear(bb))
+                                    face_box(g, f, a - 0.42f, a + 0.42f, 0.0f, 0.55f, z + 0.12f, z + 0.72f, M::Concrete,
+                                             M::Concrete, M::Metal);
+                            }
+                            // Window cages (security grilles) on the lower floors, Hong Kong style.
+                            if (z < 26.0f && rng.chance(0.28f)) {
+                                const float hw = pitch * (0.5f - 0.22f) + 0.05f;
+                                const float c0 = z + 0.32f * fh - 0.05f, c1 = z + 0.8f * fh + 0.05f;
+                                if (g.clear(f.bounds(a - hw, a + hw, 0.0f, 0.55f, c0, c1)))
+                                    g.box(f.point(a, 0.25f), f.t, hw, 0.25f, c0, c1, M::Louvre, M::Metal, M::Metal, true);
+                            }
                         }
                     for (int p = 0; p < 2; ++p) {
                         const float a = rng.range(-f.half_len + 0.5f, f.half_len - 0.5f);

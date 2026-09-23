@@ -502,14 +502,16 @@ std::shared_ptr<const CitySnapshot> build_snapshot(const city::Params& p, std::i
     snap->center_ty = cty;
     // Full-detail meshes near the streaming centre, massing-only meshes beyond.
     const float cx = (static_cast<float>(ctx) + 0.5f) * tile_size, cy = (static_cast<float>(cty) + 0.5f) * tile_size;
-    const float detail_radius = tile_size * 2.6f;
-    const float near_radius = tile_size * 1.5f;  // facade relief (heaviest geometry)
+    // Detail parts are cheap GPU instances, so the whole detail ring gets facade relief.
+    const float detail_radius = tile_size * 3.2f;
+    const float near_radius = detail_radius;
     CityMesh& mesh = snap->mesh;
     std::vector<TowerAnchor> towers;
     for (std::int32_t ty = cty - radius; ty <= cty + radius; ++ty)
         for (std::int32_t tx = ctx - radius; tx <= ctx + radius; ++tx) {
             MeshChunk chunk;
             chunk.first_index = static_cast<std::uint32_t>(mesh.indices.size());
+            chunk.first_box = static_cast<std::uint32_t>(mesh.boxes.size());
             chunk.min[0] = chunk.min[1] = chunk.min[2] = 1e30f;
             chunk.max[0] = chunk.max[1] = chunk.max[2] = -1e30f;
             for (const city::Building& b : city::generate_tile(p, tx, ty, tile_size)) {
@@ -543,7 +545,8 @@ std::shared_ptr<const CitySnapshot> build_snapshot(const city::Params& p, std::i
             }
             chunk.min[2] = 0.0f;
             chunk.index_count = static_cast<std::uint32_t>(mesh.indices.size()) - chunk.first_index;
-            if (chunk.index_count) mesh.chunks.push_back(chunk);
+            chunk.box_count = static_cast<std::uint32_t>(mesh.boxes.size()) - chunk.first_box;
+            if (chunk.index_count || chunk.box_count) mesh.chunks.push_back(chunk);
         }
 
     for (const SignInstance& s : snap->signs) {
@@ -562,11 +565,13 @@ std::shared_ptr<const CitySnapshot> build_snapshot(const city::Params& p, std::i
     {
         MeshChunk chunk;
         chunk.first_index = static_cast<std::uint32_t>(mesh.indices.size());
+        chunk.first_box = static_cast<std::uint32_t>(mesh.boxes.size());
         build_skybridges(towers, mesh, snap->point_lights);
         chunk.index_count = static_cast<std::uint32_t>(mesh.indices.size()) - chunk.first_index;
+        chunk.box_count = static_cast<std::uint32_t>(mesh.boxes.size()) - chunk.first_box;
         chunk.min[0] = cx - detail_radius - 60.0f; chunk.min[1] = cy - detail_radius - 60.0f; chunk.min[2] = 0.0f;
         chunk.max[0] = cx + detail_radius + 60.0f; chunk.max[1] = cy + detail_radius + 60.0f; chunk.max[2] = 700.0f;
-        if (chunk.index_count) mesh.chunks.push_back(chunk);
+        if (chunk.index_count || chunk.box_count) mesh.chunks.push_back(chunk);
     }
 
     // Cables between low buildings in the full-detail area: one extra chunk.
@@ -580,6 +585,7 @@ std::shared_ptr<const CitySnapshot> build_snapshot(const city::Params& p, std::i
         }
         MeshChunk chunk;
         chunk.first_index = static_cast<std::uint32_t>(mesh.indices.size());
+        chunk.first_box = static_cast<std::uint32_t>(mesh.boxes.size());
         build_cables(anchors, mesh);
         chunk.index_count = static_cast<std::uint32_t>(mesh.indices.size()) - chunk.first_index;
         chunk.min[0] = cx - detail_radius; chunk.min[1] = cy - detail_radius; chunk.min[2] = 0.0f;

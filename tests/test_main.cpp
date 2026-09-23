@@ -245,6 +245,17 @@ void test_building_meshes() {
         }
     }
     CHECK(covered == m.indices.size());
+    // Instanced box parts: valid building, materials and extents, all covered by chunks.
+    std::uint32_t boxes_covered = 0;
+    for (const MeshChunk& c : m.chunks) boxes_covered += c.box_count;
+    CHECK(boxes_covered == m.boxes.size());
+    CHECK(!m.boxes.empty());
+    for (const BoxInstance& b : m.boxes) {
+        CHECK(b.building < snap->buildings.size());
+        for (int k = 0; k < 3; ++k)
+            CHECK(((b.materials >> (8 * k)) & 0xFFu) <= static_cast<std::uint32_t>(SurfaceMaterial::Plastic));
+        CHECK(b.hx > 0.0f && b.hy > 0.0f && b.height > 0.0f && std::isfinite(b.x + b.y + b.z0 + b.yaw));
+    }
 
     // Same inputs, same mesh (tiles must rebuild identically when streamed back in).
     const auto again = build_snapshot(p, 0, 0, 256.0f, 1);

@@ -44,8 +44,23 @@ inline constexpr float kFaceStride = 256.0f;
 
 // Indices [first_index, first_index + index_count) of one streaming tile, with bounds
 // for frustum culling.
+// A box-shaped part (relief pier, balcony slab, AC unit, pod...) drawn by GPU instancing
+// (shaders/box_detail.vert expands the faces): 48 bytes instead of ~700 as triangles.
+// Local frame: x along `yaw`, y = perpendicular (left of x), z up.
+struct BoxInstance {
+    float x, y, z0, yaw;          // centre of the base
+    float hx, hy, height, pad;    // half extents x/y, full height
+    std::uint32_t building;       // index into CitySnapshot::buildings
+    std::uint32_t materials;      // SurfaceMaterial: bits 0-7 sides, 8-15 top, 16-23 bottom
+    std::uint32_t flags;          // kOpenBack: no +y face (it sits against a wall)
+    std::uint32_t pad2;
+    static constexpr std::uint32_t kOpenBack = 1;
+};
+static_assert(sizeof(BoxInstance) == 48);
+
 struct MeshChunk {
     std::uint32_t first_index = 0, index_count = 0;
+    std::uint32_t first_box = 0, box_count = 0;
     float min[3]{}, max[3]{};
 };
 
@@ -60,6 +75,7 @@ static_assert(sizeof(PointLight) == 32);
 struct CityMesh {
     std::vector<MeshVertex> vertices;
     std::vector<std::uint32_t> indices;
+    std::vector<BoxInstance> boxes;
     std::vector<MeshChunk> chunks;
 };
 

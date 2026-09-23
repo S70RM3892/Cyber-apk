@@ -246,7 +246,7 @@ Renderer::~Renderer() {
     vkDeviceWaitIdle(dev);
     destroy_sized();
     for (VkPipeline p : {ground_pso_, buildings_pso_, signs_pso_, sky_pso_, rain_pso_, traffic_pso_, streetlife_pso_,
-                         beacon_pso_, signs_glow_pso_, props_pso_, lights_pso_, infra_pso_, detail_pso_, halo_pso_, resolve_pso_,
+                         beacon_pso_, signs_glow_pso_, props_pso_, lights_pso_, infra_pso_, detail_pso_, halo_pso_, box_pso_, resolve_pso_,
                          bloom_down_pso_,
                          bloom_up_pso_, tonemap_pso_})
         vkDestroyPipeline(dev, p, nullptr);
@@ -273,6 +273,7 @@ Renderer::~Renderer() {
     vk::destroy(ctx_, point_lights_);
     vk::destroy(ctx_, light_grid_);
     vk::destroy(ctx_, halos_);
+    vk::destroy(ctx_, boxes_);
     vk::destroy(ctx_, road_field_);
     vk::destroy(ctx_, sign_atlas_);
     vk::destroy(ctx_, mat_albedo_);
@@ -328,6 +329,7 @@ void Renderer::create_static() {
     ensure_buffer(lights_, 64 * sizeof(LightSprite));
     ensure_buffer(point_lights_, 64 * sizeof(PointLight));
     ensure_buffer(halos_, 64 * sizeof(PointLight));
+    ensure_buffer(boxes_, 64 * sizeof(BoxInstance));
     // An empty grid (all cells zero lights) until the first snapshot arrives.
     ensure_buffer(light_grid_, kLightGridCells * 2 * sizeof(std::uint32_t));
     std::memset(light_grid_.mapped, 0, kLightGridCells * 2 * sizeof(std::uint32_t));
@@ -393,7 +395,7 @@ void Renderer::create_static() {
 
     // Descriptor set layouts.
     {
-        VkDescriptorSetLayoutBinding b[14]{};
+        VkDescriptorSetLayoutBinding b[15]{};
         const VkShaderStageFlags vf = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
         b[0] = {0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 1, vf, nullptr};
         b[1] = {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, vf, nullptr};
@@ -409,8 +411,9 @@ void Renderer::create_static() {
         b[11] = {11, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT, nullptr};  // halos
         b[12] = {12, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};  // material albedo
         b[13] = {13, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};  // material normal/rough
+        b[14] = {14, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT, nullptr};  // box instances
         VkDescriptorSetLayoutCreateInfo ci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-        ci.bindingCount = 14;
+        ci.bindingCount = 15;
         ci.pBindings = b;
         VK_CHECK(vkCreateDescriptorSetLayout(dev, &ci, nullptr, &scene_set_layout_));
     }
@@ -441,7 +444,7 @@ void Renderer::create_static() {
     // Scene set lives in a pool that survives resizes.
     {
         VkDescriptorPoolSize sizes[] = {{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 1},
-                                        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 8},
+                                        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 9},
                                         {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 5}};
         VkDescriptorPoolCreateInfo ci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
         ci.maxSets = 1;
@@ -528,7 +531,8 @@ void Renderer::write_scene_set() {
     VkDescriptorImageInfo depth{point_clamp_, depth_.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
     VkDescriptorImageInfo malb{material_sampler_, mat_albedo_.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
     VkDescriptorImageInfo mnrm{material_sampler_, mat_nrm_.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-    VkWriteDescriptorSet w[14]{};
+    VkDescriptorBufferInfo bxs{boxes_.buffer, 0, VK_WHOLE_SIZE};
+    VkWriteDescriptorSet w[15]{};
     for (auto& x : w) {
         x.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         x.dstSet = scene_set_;
@@ -577,12 +581,15 @@ void Renderer::write_scene_set() {
     w[13].dstBinding = 13;
     w[13].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     w[13].pImageInfo = &mnrm;
+    w[14].dstBinding = 14;
+    w[14].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    w[14].pBufferInfo = &bxs;
     // Depth (w[11]) is written once the size-dependent target exists.
     if (depth_.view) {
-        vkUpdateDescriptorSets(ctx_.device(), 14, w, 0, nullptr);
+        vkUpdateDescriptorSets(ctx_.device(), 15, w, 0, nullptr);
     } else {
-        std::swap(w[11], w[13]);
-        vkUpdateDescriptorSets(ctx_.device(), 13, w, 0, nullptr);
+        std::swap(w[11], w[14]);
+        vkUpdateDescriptorSets(ctx_.device(), 14, w, 0, nullptr);
     }
 }
 
@@ -630,6 +637,11 @@ void Renderer::create_pipelines() {
         m.vertex_bindings = std::span(&binding, 1);
         m.vertex_attributes = attrs;
         detail_pso_ = make_pipeline(ctx_, m);
+        // Instanced boxes: same fragment shader, faces generated in the vertex shader.
+        PipelineDesc bd = d;
+        bd.vs = sh::box_detail_vert;
+        bd.fs = sh::detail_frag;
+        box_pso_ = make_pipeline(ctx_, bd);
     }
     {
         // Smog halos: additive into the resolved image, no depth attachment (the shader
@@ -880,6 +892,9 @@ void Renderer::upload_world(const CitySnapshot& snap) {
     ensure_buffer(halos_, hsize);
     if (hsize) std::memcpy(halos_.mapped, snap.halos.data(), hsize);
     halo_count_ = static_cast<std::uint32_t>(snap.halos.size());
+    const VkDeviceSize bxsize = snap.mesh.boxes.size() * sizeof(BoxInstance);
+    ensure_buffer(boxes_, bxsize);
+    if (bxsize) std::memcpy(boxes_.mapped, snap.mesh.boxes.data(), bxsize);
     building_count_ = static_cast<std::uint32_t>(snap.buildings.size());
     sign_count_ = static_cast<std::uint32_t>(snap.signs.size());
     prop_count_ = static_cast<std::uint32_t>(snap.props.size());
@@ -1035,7 +1050,18 @@ void Renderer::record(VkCommandBuffer cmd, std::uint32_t slot, const Game& game,
             vkCmdBindIndexBuffer(cmd, mesh_indices_.buffer, 0, VK_INDEX_TYPE_UINT32);
             const Frustum fr = frustum_of(view_proj_);
             for (const MeshChunk& c : mesh_chunks_)
-                if (fr.visible(c.min, c.max)) vkCmdDrawIndexed(cmd, c.index_count, 1, c.first_index, 0, 0);
+                if (c.index_count && fr.visible(c.min, c.max)) vkCmdDrawIndexed(cmd, c.index_count, 1, c.first_index, 0, 0);
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, box_pso_);
+            // Box parts are centimetre-to-metre relief: past ~400 m they are sub-pixel, so
+            // whole tiles skip them there.
+            const Vec3 cam = game.camera().position;
+            for (const MeshChunk& c : mesh_chunks_) {
+                if (!c.box_count || !fr.visible(c.min, c.max)) continue;
+                const float dx = std::max({c.min[0] - cam.x, 0.0f, cam.x - c.max[0]});
+                const float dy = std::max({c.min[1] - cam.y, 0.0f, cam.y - c.max[1]});
+                if (dx * dx + dy * dy > 400.0f * 400.0f) continue;
+                vkCmdDraw(cmd, 36, c.box_count, 0, c.first_box);
+            }
         }
         if (building_count_) {
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, buildings_pso_);
