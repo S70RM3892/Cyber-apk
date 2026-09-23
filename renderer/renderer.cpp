@@ -1003,7 +1003,7 @@ void Renderer::record(VkCommandBuffer cmd, std::uint32_t slot, const Game& game,
                                        kAnyFragmentWork, 0, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
                                        VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT});
             const float push[4] = {1.0f / static_cast<float>(src_extent.width),
-                                   1.0f / static_cast<float>(src_extent.height), i == 0 ? 1.0f : 0.0f, 0.6f};
+                                   1.0f / static_cast<float>(src_extent.height), i == 0 ? 1.0f : 0.0f, 1.2f};  // threshold: neon / screens bloom, lit windows don't
             fullscreen_pass(cmd, bloom_[i].view, bloom_[i].extent, bloom_down_pso_, bloom_down_sets_[i], slot, push,
                             sizeof(push), false);
             vk::transition(ctx_, cmd, {bloom_[i].image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,

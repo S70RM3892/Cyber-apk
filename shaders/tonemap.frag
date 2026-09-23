@@ -56,18 +56,18 @@ void main()
     float r2 = dot(centered, centered);
 
     // Chromatic aberration grows towards the corners.
-    vec2 ca = centered * r2 * 0.012;
+    vec2 ca = centered * r2 * 0.004;  // subtle: strong fringing smears building edges
     vec3 c;
     c.r = texture(hdr, uv - ca).r;
     c.g = texture(hdr, uv).g;
     c.b = texture(hdr, uv + ca).b;
 
-    // Energy-conserving bloom: the up-sampled chain sums 6 levels, so normalise it and
-    // blend towards it rather than adding. Big bright areas (a neon sign right next to
-    // the camera) then keep their brightness instead of blowing out, while small sources
-    // still spread a halo. bloom_strength is the blend weight scaled by 1/4.
+    // Selective bloom: the chain only carries what the first downsample let through its
+    // threshold (neon tubes, screens, signal lamps — not lit windows or walls), so it is
+    // added on top: glow spreads around bright sources and the dark city stays dark.
+    // The up-sampled chain sums 6 levels; normalise before weighting.
     vec3 glow = texture(bloom, uv).rgb * (1.0 / 6.0);
-    c = mix(c, glow, clamp(params.bloom_strength * 0.25, 0.0, 0.9));
+    c += glow * params.bloom_strength * 0.6;
     c *= params.exposure;
 
     // Grade: teal shadows, warm highlights, a little extra saturation.

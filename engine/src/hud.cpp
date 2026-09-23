@@ -113,40 +113,48 @@ void build_hud(HudBuilder& hud, const Game& game, const HudInput& in) {
     const float u = in.height / 720.0f;
     const float px = 2.0f * u;  // glyph pixel size
     const float margin = 24.0f * u;
+    // Safe area: system insets plus room for rounded corners and camera cutouts, which a
+    // full-screen game window does not always report (at least 4.5% of the width).
+    const float left = std::max(in.inset_left, in.width * 0.045f) + margin;
+    const float top = std::max(in.inset_top, in.height * 0.02f) + margin;
+    const float right = in.width - std::max(in.inset_right, in.width * 0.045f) - margin;
+    const float bottom = in.height - std::max(in.inset_bottom, in.height * 0.03f) - margin;
 
     // ---- Status panel (top-left) ----
     const Camera& cam = game.camera();
     const city::DistrictSample ds = city::sample(game.world().params(), cam.position.x, cam.position.y);
     char line[64];
-    hud.rect(margin - 8 * u, margin - 8 * u, 330 * u, 100 * u, 0.0f, 0.0f, 0.0f, 0.45f);
-    hud.rect(margin - 8 * u, margin - 8 * u, 4 * u, 100 * u, kPink[0], kPink[1], kPink[2], 0.9f);
-    hud.text("CYBER-APEX", margin + 4 * u, margin, px, kPink[0] * 1.5f, kPink[1] * 1.5f, kPink[2] * 1.5f, 1.0f);
-    hud.text(ds.on_road ? "ARTERIAL" : district_name(ds.district), margin + 4 * u, margin + 22 * u, px, kCyan[0],
+    // Sized to its longest line so nothing overhangs the panel.
+    std::snprintf(line, sizeof line, "CREDITS %u  GIGS %u", game.credits(), game.gigs_completed());
+    const float panel_w = std::max(HudBuilder::text_width("CYBER-APEX", px), HudBuilder::text_width(line, px * 0.9f)) + 24 * u;
+    hud.rect(left - 8 * u, top - 8 * u, panel_w, 80 * u, 0.0f, 0.0f, 0.0f, 0.5f);
+    hud.rect(left - 8 * u, top - 8 * u, 4 * u, 80 * u, kPink[0], kPink[1], kPink[2], 0.9f);
+    hud.text("CYBER-APEX", left + 4 * u, top, px, kPink[0] * 1.5f, kPink[1] * 1.5f, kPink[2] * 1.5f, 1.0f);
+    hud.text(ds.on_road ? "ARTERIAL" : district_name(ds.district), left + 4 * u, top + 22 * u, px, kCyan[0],
              kCyan[1], kCyan[2], 1.0f);
-    std::snprintf(line, sizeof line, "X %6.0f  Y %6.0f", static_cast<double>(cam.position.x),
-                  static_cast<double>(cam.position.y));
-    hud.text(line, margin + 4 * u, margin + 44 * u, px * 0.8f, 0.8f, 0.85f, 0.9f, 0.85f);
-    std::snprintf(line, sizeof line, "CR %u   GIGS %u", game.credits(), game.gigs_completed());
-    hud.text(line, margin + 4 * u, margin + 64 * u, px * 0.9f, kYellow[0], kYellow[1], kYellow[2], 1.0f);
+    hud.text(line, left + 4 * u, top + 44 * u, px * 0.9f, kYellow[0], kYellow[1], kYellow[2], 1.0f);
 
-    // ---- Performance (top-right) ----
+    // ---- Performance (top-right, developer builds only) ----
+    if (in.show_perf) {
+    const float margin_r = in.width - right;
     std::snprintf(line, sizeof line, "%3.0f FPS", static_cast<double>(in.fps));
     const float fps_w = HudBuilder::text_width(line, px);
-    hud.text(line, in.width - margin - fps_w, margin, px, kYellow[0], kYellow[1], kYellow[2], 1.0f);
+    hud.text(line, in.width - margin_r - fps_w, top, px, kYellow[0], kYellow[1], kYellow[2], 1.0f);
     std::snprintf(line, sizeof line, "RES %3.0f%%", static_cast<double>(in.render_scale * 100.0f));
-    hud.text(line, in.width - margin - HudBuilder::text_width(line, px * 0.8f), margin + 22 * u, px * 0.8f, 0.8f,
+    hud.text(line, in.width - margin_r - HudBuilder::text_width(line, px * 0.8f), top + 22 * u, px * 0.8f, 0.8f,
              0.85f, 0.9f, 0.8f);
     if (in.gpu_ms > 0.0f) {
         std::snprintf(line, sizeof line, "GPU %4.1fMS", static_cast<double>(in.gpu_ms));
-        hud.text(line, in.width - margin - HudBuilder::text_width(line, px * 0.8f), margin + 40 * u, px * 0.8f, 0.8f,
+        hud.text(line, in.width - margin_r - HudBuilder::text_width(line, px * 0.8f), top + 40 * u, px * 0.8f, 0.8f,
                  0.85f, 0.9f, 0.8f);
+    }
     }
 
     // ---- Compass (top-centre) ----
     // Compass heading: 0 = north (+Y), clockwise. Camera yaw: 0 = +X, counter-clockwise.
     const float deg = std::numbers::pi_v<float> / 180.0f;
     const float heading = std::fmod(90.0f - cam.yaw / deg + 720.0f, 360.0f);
-    const float cw = 420.0f * u, cx = in.width * 0.5f, cy = margin + 6 * u;
+    const float cw = 420.0f * u, cx = in.width * 0.5f, cy = top + 6 * u;
     hud.rect(cx - cw * 0.5f, cy + 16 * u, cw, 2 * u, kCyan[0], kCyan[1], kCyan[2], 0.5f);
     const char* labels[8] = {"N", "NE", "E", "SE", "S", "SW", "W", "NW"};
     for (int i = 0; i < 24; ++i) {
@@ -176,17 +184,24 @@ void build_hud(HudBuilder& hud, const Game& game, const HudInput& in) {
         float d = std::fmod(bearing - heading + 540.0f, 360.0f) - 180.0f;
         const bool off = std::fabs(d) > 60.0f;
         d = std::clamp(d, -60.0f, 60.0f);
+        // On the compass band; an objective behind you pins to the band's end as an arrow.
         const float mx = cx + d / 60.0f * cw * 0.5f;
-        const float blink = off ? 0.5f + 0.5f * std::sin(game.time() * 8.0f) : 1.0f;
-        hud.ring(mx, cy + 34 * u, 7 * u, 0.0f, kYellow[0], kYellow[1], kYellow[2], blink);
+        if (off) {
+            const char* arrow = d < 0.0f ? "<" : ">";
+            const float blink = 0.5f + 0.5f * std::sin(game.time() * 8.0f);
+            hud.text(arrow, mx - (d < 0.0f ? 0.0f : HudBuilder::text_width(arrow, px * 1.2f)), cy + 22 * u, px * 1.2f,
+                     kYellow[0], kYellow[1], kYellow[2], blink);
+        } else {
+            hud.ring(mx, cy + 26 * u, 6 * u, 0.0f, kYellow[0], kYellow[1], kYellow[2], 1.0f);
+        }
         const float late = std::max(0.0f, gig.elapsed - gig.par_time) / gig.par_time;
         const unsigned pay = static_cast<unsigned>(gig.reward * std::max(0.25f, 1.0f - late));
-        const float left = std::max(0.0f, gig.par_time - gig.elapsed);
-        std::snprintf(line, sizeof line, "GIG %u  %4.0fM  %3.0fS  %u CR", gig.index, static_cast<double>(dist),
-                      static_cast<double>(left), pay);
+        const float time_left = std::max(0.0f, gig.par_time - gig.elapsed);
+        std::snprintf(line, sizeof line, "GIG %u  DIST %.0fM  TIME %.0fS  PAY %u CR", gig.index,
+                      static_cast<double>(dist), static_cast<double>(time_left), pay);
         const float lw = HudBuilder::text_width(line, px * 0.9f);
         hud.rect(cx - lw * 0.5f - 10 * u, cy + 46 * u, lw + 20 * u, 26 * u, 0.0f, 0.0f, 0.0f, 0.45f);
-        hud.text(line, cx - lw * 0.5f, cy + 52 * u, px * 0.9f, kYellow[0], kYellow[1], kYellow[2], left > 0.0f ? 1.0f : 0.6f);
+        hud.text(line, cx - lw * 0.5f, cy + 52 * u, px * 0.9f, kYellow[0], kYellow[1], kYellow[2], time_left > 0.0f ? 1.0f : 0.6f);
 
         // Payout flash.
         if (game.since_payout() < 2.5f) {
@@ -206,7 +221,8 @@ void build_hud(HudBuilder& hud, const Game& game, const HudInput& in) {
     // ---- Car button (summon / exit) ----
     {
         const HudButton cb = car_button(in.width, in.height);
-        const float a = in.car_held ? 0.55f : 0.25f;
+        const float a = in.car_held ? 0.55f : 0.12f;
+        hud.ring(cb.cx, cb.cy, cb.radius, 0.0f, 0.0f, 0.0f, 0.0f, in.car_held ? 0.5f : 0.3f);  // backing: legible over signs
         hud.ring(cb.cx, cb.cy, cb.radius, 0.08f, kCyan[0], kCyan[1], kCyan[2], a + 0.2f);
         if (in.car_held) hud.ring(cb.cx, cb.cy, cb.radius * 0.9f, 0.0f, kCyan[0], kCyan[1], kCyan[2], 0.25f);
         const char* label = driving ? "EXIT" : "CAR";
@@ -231,7 +247,8 @@ void build_hud(HudBuilder& hud, const Game& game, const HudInput& in) {
     // ---- Jump button (on foot) ----
     if (!driving) {
         const HudButton jb = jump_button(in.width, in.height);
-        const float a = in.jump_held ? 0.55f : 0.25f;
+        const float a = in.jump_held ? 0.55f : 0.12f;
+        hud.ring(jb.cx, jb.cy, jb.radius, 0.0f, 0.0f, 0.0f, 0.0f, in.jump_held ? 0.5f : 0.3f);
         hud.ring(jb.cx, jb.cy, jb.radius, 0.08f, kPink[0], kPink[1], kPink[2], a + 0.2f);
         if (in.jump_held) hud.ring(jb.cx, jb.cy, jb.radius * 0.9f, 0.0f, kPink[0], kPink[1], kPink[2], 0.25f);
         // Charge: a growing yellow disc; full = roof-height jump.
@@ -251,13 +268,13 @@ void build_hud(HudBuilder& hud, const Game& game, const HudInput& in) {
                  kCyan[0], kCyan[1], kCyan[2], 0.35f);
     } else {
         // Hint where the stick lives.
-        const float r = 70.0f * u;
-        hud.ring(margin + 110 * u, in.height - margin - 110 * u, r, 0.05f, 1.0f, 1.0f, 1.0f, 0.18f);
+        // Faint while idle: the controls shouldn't cover the view.
+        const float r = 56.0f * u;
+        const float sx = left + 70 * u, sy = bottom - 70 * u;
+        hud.ring(sx, sy, r, 0.05f, 1.0f, 1.0f, 1.0f, 0.12f);
         const char* stick_label = driving ? "DRIVE" : "MOVE";
-        hud.text(stick_label, margin + 110 * u - HudBuilder::text_width(stick_label, px * 0.8f) * 0.5f,
-                 in.height - margin - 116 * u, px * 0.8f, 1.0f, 1.0f, 1.0f, 0.35f);
-        hud.text("DRAG TO LOOK", in.width - margin - HudBuilder::text_width("DRAG TO LOOK", px * 0.8f),
-                 in.height - margin - 20 * u, px * 0.8f, 1.0f, 1.0f, 1.0f, 0.3f);
+        hud.text(stick_label, sx - HudBuilder::text_width(stick_label, px * 0.8f) * 0.5f, sy - 6 * u, px * 0.8f, 1.0f,
+                 1.0f, 1.0f, 0.25f);
     }
 }
 

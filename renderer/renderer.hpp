@@ -25,7 +25,7 @@ struct RenderSettings {
     float min_scale = 0.5f, max_scale = 1.0f;
     float gpu_budget_ms = 7.5f;  // holds a 120 Hz display (8.3 ms vsync) where the GPU allows
     int ssr_steps = 24;
-    float exposure = 1.8f;
+    float exposure = 1.35f;
     float bloom_strength = 1.7f;
     float rain = 1.0f;
     float fog_density = 0.0045f;

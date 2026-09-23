@@ -77,8 +77,11 @@ void main()
     vec3 view_dir = normalize(in_world_pos - frame.camera_pos.xyz);
     vec3 neon_diffuse, neon_spec;
     local_lights(vec3(p, 0.02), vec3(0.0, 0.0, 1.0), view_dir, mix(40.0, 600.0, puddle), neon_diffuse, neon_spec);
-    vec3 lit = albedo * (ambient * 4.0 + lamps + spill_col * spill * 8.0 + neon_diffuse * 0.8) +
-               neon_spec * mix(0.15, 0.6, puddle) * rain;
+    // Neon on the ground reads mostly as coloured wet sheen, so the diffuse term uses a
+    // brighter "wet film" albedo than the dark asphalt itself.
+    vec3 neon_albedo = mix(vec3(0.05), albedo * 2.0, 0.5);
+    vec3 lit = albedo * (ambient * 4.0 + lamps + spill_col * spill * 8.0) + neon_albedo * neon_diffuse +
+               neon_spec * mix(0.25, 0.9, puddle) * rain;
 
     // Puddle ripples from rain: perturb the reflection normal.
     vec2 ripple = vec2(0.0);

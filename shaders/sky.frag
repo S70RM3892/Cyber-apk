@@ -23,7 +23,7 @@ void main()
         vec2 cp = frame.camera_pos.xy + dir.xy * dist;
         float n = fbm(cp * 0.004 + vec2(t * 0.01, t * 0.004));
         float cover = smoothstep(0.2, 0.7, n);
-        vec3 under_lit = mix(vec3(0.07, 0.04, 0.05), vec3(0.04, 0.065, 0.072), value_noise(cp * 0.0015));
+        vec3 under_lit = mix(vec3(0.035, 0.018, 0.024), vec3(0.018, 0.032, 0.036), value_noise(cp * 0.0015));
         float horizon_fade = smoothstep(0.01, 0.25, dir.z);
         c = mix(c, under_lit * (0.45 + 0.55 * n), cover * horizon_fade * 0.85);
     }

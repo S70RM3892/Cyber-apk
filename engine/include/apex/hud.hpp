@@ -39,6 +39,9 @@ struct HudInput {
     StickState stick;
     bool jump_held = false;
     bool car_held = false;
+    // Screen area covered by system UI, cutouts or rounded corners (logical pixels).
+    float inset_left = 0, inset_top = 0, inset_right = 0, inset_bottom = 0;
+    bool show_perf = false;  // FPS / resolution / GPU readout: developer builds only
 };
 
 class HudBuilder {

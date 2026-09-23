@@ -381,9 +381,11 @@ PointLight sign_light(const SignInstance& s) {
             out = 0.2f * std::sqrt(area);
             break;
     }
-    const float power = std::min(emit * area, 900.0f);
+    // Signs are the city's main light: strong enough to stain the wall around them and
+    // the street below in their own colour.
+    const float power = std::min(emit * area * 3.0f, 2400.0f);
     const float nx = std::cos(s.yaw), ny = std::sin(s.yaw);
-    const float radius = std::clamp(std::sqrt(power) * 4.5f, 4.0f, 48.0f);
+    const float radius = std::clamp(std::sqrt(power) * 4.0f, 5.0f, 48.0f);
     return {s.x + nx * out, s.y + ny * out, s.z + dz, radius, c.r * power, c.g * power, c.b * power, 0.0f};
 }
 

@@ -337,6 +337,22 @@ public:
         hi.stick = controls_.stick();
         hi.jump_held = controls_.jump_held();
         hi.car_held = controls_.car_held();
+        // System bars / cutouts: the glue keeps the visible content rect (window pixels).
+        if (app_->window) {
+            const float ww = static_cast<float>(ANativeWindow_getWidth(app_->window));
+            const float wh = static_cast<float>(ANativeWindow_getHeight(app_->window));
+            const ARect r = app_->contentRect;
+            if (ww > 0 && wh > 0 && r.right > r.left && r.bottom > r.top) {
+                const float sx = hi.width / ww, sy = hi.height / wh;
+                hi.inset_left = static_cast<float>(r.left) * sx;
+                hi.inset_top = static_cast<float>(r.top) * sy;
+                hi.inset_right = (ww - static_cast<float>(r.right)) * sx;
+                hi.inset_bottom = (wh - static_cast<float>(r.bottom)) * sy;
+            }
+        }
+#ifndef NDEBUG
+        hi.show_perf = true;  // debug APKs show FPS / resolution / GPU time
+#endif
         build_hud(hud_, *game_, hi);
 
         if (presenter_->frame(*game_, *renderer_, world_dirty_, hud_.quads())) world_dirty_ = false;

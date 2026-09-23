@@ -79,6 +79,7 @@ struct Args {
     int present_frames = 0;
     bool hud = true;
     bool hud_stick = false;
+    bool perf = false;  // show the FPS / GPU readout in the HUD
     bool face_gig = false;
     float drive_seconds = 0;
     int traffic = -1;
@@ -108,6 +109,7 @@ Args parse(int argc, char** argv) {
         else if (k == "--present") a.present_frames = std::stoi(next());
         else if (k == "--no-hud") a.hud = false;
         else if (k == "--hud-stick") a.hud_stick = true;
+        else if (k == "--perf") a.perf = true;
         else if (k == "--face-gig") a.face_gig = true;
         else if (k == "--drive") a.drive_seconds = std::stof(next());
         else if (k == "--traffic") a.traffic = std::stoi(next());
@@ -285,6 +287,7 @@ int main(int argc, char** argv) {
         VK_CHECK(vkBeginCommandBuffer(cmd, &bi));
         HudInput hi;
         hi.width = static_cast<float>(extent.width);
+        hi.show_perf = args.perf;
         hi.height = static_cast<float>(extent.height);
         hi.fps = 60.0f;
         hi.render_scale = settings.render_scale;
