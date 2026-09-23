@@ -143,6 +143,10 @@ void Context::create_device(const ContextDesc& desc, VkSurfaceKHR present_surfac
     en13.dynamicRendering = VK_TRUE;
     en13.synchronization2 = VK_TRUE;
     VkPhysicalDeviceFeatures2 enabled{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, &en13};
+    // Anisotropic filtering keeps material textures sharp on walls and streets seen at a
+    // grazing angle (optional: used only when the device has it).
+    enabled.features.samplerAnisotropy = supported.features.samplerAnisotropy;
+    anisotropy_ = supported.features.samplerAnisotropy == VK_TRUE;
 
     const float priority = 1.0f;
     VkDeviceQueueCreateInfo qci{VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};

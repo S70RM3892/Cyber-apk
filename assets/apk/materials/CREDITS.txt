@@ -1,0 +1,9 @@
+Material textures from ambientCG (https://ambientcg.com), CC0 1.0 Universal.
+layer 0: Concrete034 (https://ambientcg.com/view?id=Concrete034)
+layer 1: PaintedMetal004 (https://ambientcg.com/view?id=PaintedMetal004)
+layer 2: CorrugatedSteel005 (https://ambientcg.com/view?id=CorrugatedSteel005)
+layer 3: Asphalt031 (https://ambientcg.com/view?id=Asphalt031)
+layer 4: PavingStones138 (https://ambientcg.com/view?id=PavingStones138)
+layer 5: Metal021 (https://ambientcg.com/view?id=Metal021)
+layer 6: PaintedPlaster017 (https://ambientcg.com/view?id=PaintedPlaster017)
+layer 7: MetalPlates006 (https://ambientcg.com/view?id=MetalPlates006)

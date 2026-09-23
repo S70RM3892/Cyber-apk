@@ -58,6 +58,7 @@ public:
     std::uint32_t queue_family() const { return queue_family_; }
     const DeviceFns& fns() const { return fns_; }
     const VkPhysicalDeviceProperties& properties() const { return props_; }
+    bool anisotropy() const { return anisotropy_; }  // samplerAnisotropy enabled
 
     std::uint32_t find_memory_type(std::uint32_t type_bits, VkMemoryPropertyFlags flags) const;
     bool supports_format(VkFormat format, VkFormatFeatureFlags features) const;
@@ -70,6 +71,7 @@ private:
     VkQueue queue_ = VK_NULL_HANDLE;
     std::uint32_t queue_family_ = 0;
     VkPhysicalDeviceProperties props_{};
+    bool anisotropy_ = false;
     VkPhysicalDeviceMemoryProperties mem_props_{};
     DeviceFns fns_;
 };

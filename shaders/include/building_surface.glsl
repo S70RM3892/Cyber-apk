@@ -8,6 +8,7 @@
 
 #include "city_common.glsl"
 #include "lighting.glsl"
+#include "materials.glsl"
 
 // SurfaceMaterial (city_mesh.hpp).
 const uint kMatFacade = 0u;
@@ -33,6 +34,7 @@ struct Surface {
     vec4 material;    // r reflectivity (SSR), g roughness, ba normal perturbation
     float specular;   // weight of the local-light highlights
     float shininess;
+    float glass;      // 1 where the surface is window glass (material textures skip it)
 };
 
 Surface surface_default()
@@ -43,6 +45,7 @@ Surface surface_default()
     s.material = vec4(0.0, 1.0, 0.5, 0.5);
     s.specular = 0.02;
     s.shininess = 16.0;
+    s.glass = 0.0;
     return s;
 }
 
@@ -334,6 +337,7 @@ Surface facade(float u, float v, uint seed, uint district, uint face_seed, vec3 
     // Large-scale weathering so a facade isn't one flat colour.
     wall *= 0.75 + 0.5 * value_noise(vec2(u * 0.08, v * 0.05) + float(seed & 255u));
     s.albedo = (wall + extra_albedo) * 5.0 * (1.0 - glass * 0.6);
+    s.glass = clamp(glass * (1.0 - shop) + shop * shop_win, 0.0, 1.0);
     // Glass catches sharp highlights from the signs around it.
     s.specular = mix(0.03, 0.25, glass * (1.0 - shop));
     s.shininess = mix(24.0, 256.0, glass);

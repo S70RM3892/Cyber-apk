@@ -2,6 +2,9 @@
 // the tools must build in a bare CI container.
 #include <cmath>
 #include <cstdio>
+#include <fstream>
+#include <optional>
+#include <string>
 #include <algorithm>
 #include <map>
 #include <numbers>
@@ -17,6 +20,7 @@
 #include "apex/specular_aa.hpp"
 #include "apex/game.hpp"
 #include "apex/massing.hpp"
+#include "apex/materials.hpp"
 #include "apex/world.hpp"
 
 namespace {
@@ -262,6 +266,25 @@ void test_mesh_no_degenerate_normals() {
             ++bad;
     }
     CHECK(bad == 0);
+}
+
+void test_material_textures() {
+    // Every shipped layer decodes to the same square size with a full mip chain, and the
+    // packed normals are centred (flat on average), so shading isn't tilted.
+    const auto t = load_material_textures([](const std::string& name) -> std::optional<std::vector<std::uint8_t>> {
+        std::ifstream f(std::string(APEX_ASSET_DIR) + "/" + name, std::ios::binary);
+        if (!f) return std::nullopt;
+        return std::vector<std::uint8_t>(std::istreambuf_iterator<char>(f), {});
+    });
+    CHECK(t.has_value());
+    if (!t) return;
+    CHECK(t->size == 512 && t->mips == 10);
+    CHECK(t->albedo.size() == t->layer_bytes() * MaterialTextures::kLayers);
+    CHECK(t->nrm.size() == t->albedo.size());
+    for (std::uint32_t l = 0; l < MaterialTextures::kLayers; ++l) {
+        const std::uint8_t* last = t->nrm.data() + (l + 1) * t->layer_bytes() - 4;  // 1x1 mip
+        CHECK(std::abs(static_cast<int>(last[0]) - 128) < 20 && std::abs(static_cast<int>(last[1]) - 128) < 20);
+    }
 }
 
 void test_light_grid() {
@@ -547,6 +570,7 @@ int main() {
     test_building_meshes();
     test_light_grid();
     test_mesh_no_degenerate_normals();
+    test_material_textures();
     test_collision();
     test_gigs();
     test_jump();

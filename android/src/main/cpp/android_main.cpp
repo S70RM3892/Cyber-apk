@@ -9,6 +9,7 @@
 #include <aaudio/AAudio.h>
 #include <android/input.h>
 #include <android/keycodes.h>
+#include <android/asset_manager.h>
 #include <android/log.h>
 #include <android_native_app_glue.h>
 
@@ -285,6 +286,18 @@ public:
         if (!renderer_) {
             renderer_ = std::make_unique<Renderer>(*ctx_, format, extent, RenderSettings{});
             world_dirty_ = true;
+            // Photographic material layers shipped in the APK's assets/.
+            AAssetManager* am = app_->activity->assetManager;
+            const auto materials = load_material_textures([am](const std::string& name) -> std::optional<std::vector<std::uint8_t>> {
+                AAsset* a = AAssetManager_open(am, name.c_str(), AASSET_MODE_BUFFER);
+                if (!a) return std::nullopt;
+                const auto* p = static_cast<const std::uint8_t*>(AAsset_getBuffer(a));
+                std::vector<std::uint8_t> bytes(p, p + AAsset_getLength(a));
+                AAsset_close(a);
+                return bytes;
+            });
+            if (materials) renderer_->upload_materials(*materials);
+            else __android_log_print(ANDROID_LOG_WARN, "cyberapex", "material textures missing; using flat shading");
         } else {
             renderer_->resize(extent);
         }

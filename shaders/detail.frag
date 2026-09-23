@@ -114,6 +114,58 @@ void main()
         s.specular = 0.8;
         s.shininess = 90.0;
     }
-    out_color = vec4(apply_fog(shade_surface(s, p, n, view_dir, ambient), p), 1.0);
+    // Photographic material detail: colour variation, normal relief and roughness from the
+    // CC0 layers (materials.glsl), faded out with distance where it would only shimmer.
+    float layer = -1.0, metres = 3.0;
+    if (mat <= kMatGlass) {
+        layer = district == 2u ? kTexPlaster : district == 1u ? kTexMetalPlates : kTexConcrete;
+        metres = district == 1u ? 4.0 : 3.0;
+    } else if (mat == kMatConcrete) {
+        layer = kTexConcrete; metres = 2.5;
+    } else if (mat == kMatMetal) {
+        layer = kTexPaintedMetal; metres = 1.5;
+    } else if (mat == kMatRoof) {
+        layer = kTexAsphalt; metres = 4.0;
+    } else if (mat == kMatCorrugated) {
+        layer = kTexCorrugated; metres = 2.0;
+    } else if (mat == kMatShantyWall) {
+        layer = hash_f(hash_u2(uvec2(uint(int(floor(u / 2.1)) + 4096), face_seed)) ^ 0x2u) < 0.3 ? kTexRust : kTexCorrugated;
+        metres = 2.0;
+    } else if (mat == kMatLouvre) {
+        layer = kTexMetalPlates; metres = 3.0;
+    }
+    vec3 shade_n = n;
+    if (layer >= 0.0) {
+        float dist = distance(p, frame.camera_pos.xyz);
+        float strength = 1.0 - smoothstep(60.0, 220.0, dist);
+        if (strength > 0.0) {
+            vec3 t, b;
+            vec2 uv;
+            if (abs(n.z) > 0.7) {  // roofs, slabs: world-planar
+                t = vec3(1.0, 0.0, 0.0);
+                b = vec3(0.0, sign(n.z), 0.0);
+                uv = p.xy * vec2(1.0, sign(n.z));
+                // Corrugated sheet: the texture's ribs vary along its u; line them up with
+                // the ridges corrugated_roof() draws (across y when along_x).
+                if (mat == kMatCorrugated && (seed & 1u) == 0u) {
+                    t = vec3(0.0, 1.0, 0.0);
+                    b = vec3(1.0, 0.0, 0.0);
+                    uv = p.yx;
+                }
+            } else {
+                wall_frame(n, t, b);
+                uv = vec2(u, v);
+            }
+            TexSample ts = sample_material(layer, uv, metres, n, t, b, strength * (1.0 - s.glass));
+            s.albedo *= ts.tint;
+            shade_n = ts.normal;
+            // Rougher texels dull the highlights, smooth ones sharpen them.
+            float gloss = mix(1.4, 0.5, ts.rough * strength);
+            s.specular *= gloss;
+            s.shininess *= mix(1.0, gloss, strength);
+            ambient = building_ambient(seed, p, shade_n);
+        }
+    }
+    out_color = vec4(apply_fog(shade_surface(s, p, shade_n, view_dir, ambient), p), 1.0);
     out_material = s.material;
 }

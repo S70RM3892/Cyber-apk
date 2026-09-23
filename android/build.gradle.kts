@@ -32,6 +32,9 @@ android {
         }
     }
 
+    // Material textures and other runtime assets (assets/apk/, read via AAssetManager).
+    sourceSets["main"].assets.srcDir("../assets/apk")
+
     externalNativeBuild {
         cmake {
             path = file("../CMakeLists.txt")

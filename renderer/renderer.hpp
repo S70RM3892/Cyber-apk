@@ -12,6 +12,7 @@
 
 #include "apex/game.hpp"
 #include "apex/hud.hpp"
+#include "apex/materials.hpp"
 #include "vk_resources.hpp"
 
 namespace apex {
@@ -59,6 +60,9 @@ public:
     // Re-upload streamed city data. Waits for the GPU to go idle (only happens when
     // the player crosses a tile boundary).
     void upload_world(const CitySnapshot& snap);
+    // Photographic material layers (albedo + normal/roughness arrays). Until called, a
+    // neutral 1x1 set is bound so shading is unchanged.
+    void upload_materials(const MaterialTextures& t);
 
     void record(VkCommandBuffer cmd, std::uint32_t frame_slot, const Game& game, const OutputTarget& target,
                 std::span<const HudQuad> hud = {});
@@ -83,6 +87,7 @@ private:
     // Samplers
     VkSampler linear_clamp_ = VK_NULL_HANDLE;
     VkSampler point_clamp_ = VK_NULL_HANDLE;
+    VkSampler material_sampler_ = VK_NULL_HANDLE;  // repeat, trilinear, anisotropic
 
     // Size-dependent targets
     vk::Image scene_color_, scene_material_, depth_, resolved_;
@@ -100,7 +105,8 @@ private:
     Mat4 view_proj_;
     std::uint32_t building_count_ = 0, sign_count_ = 0, prop_count_ = 0, light_count_ = 0;
     vk::Image road_field_;
-    vk::Image sign_atlas_;   // SDF glyphs for neon text (assets/sign_font_sdf.bin)
+    vk::Image sign_atlas_;
+    vk::Image mat_albedo_, mat_nrm_;  // MaterialTextures::kLayers-layer arrays   // SDF glyphs for neon text (assets/sign_font_sdf.bin)
     vk::Buffer sign_strings_;  // string table: glyph indices per sign string
     vk::Buffer road_staging_;
     std::array<float, 4> road_params_{};
@@ -147,6 +153,7 @@ private:
     int frames_since_resize_ = 0;
 
     void create_static();
+    void upload_materials_images(const MaterialTextures& t);
     void create_pipelines();
     void create_sized();
     void destroy_sized();

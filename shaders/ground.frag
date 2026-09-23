@@ -6,6 +6,7 @@
 #include "include/city_common.glsl"
 #include "include/street_layout.glsl"
 #include "include/lighting.glsl"
+#include "include/materials.glsl"
 
 layout(location = 0) in vec3 in_world_pos;
 
@@ -52,6 +53,18 @@ void main()
     float tile = step(0.94, max(fract(p.x / 1.5), fract(p.y / 1.5)));
     concrete *= 1.0 - tile * 0.4;
     vec3 albedo = mix(concrete, asphalt, road) + paint * 0.5;
+    // Photographic asphalt / paving detail near the camera.
+    float tex_strength = 1.0 - smoothstep(40.0, 160.0, distance(in_world_pos, frame.camera_pos.xyz));
+    vec3 ground_n = vec3(0.0, 0.0, 1.0);
+    float tex_rough = 0.5;
+    if (tex_strength > 0.0) {
+        TexSample ta = sample_material(kTexAsphalt, p, 5.0, vec3(0, 0, 1), vec3(1, 0, 0), vec3(0, 1, 0), tex_strength);
+        TexSample tp = sample_material(kTexPaving, p, 3.0, vec3(0, 0, 1), vec3(1, 0, 0), vec3(0, 1, 0), tex_strength);
+        float r = road;
+        albedo *= mix(tp.tint, ta.tint, r);
+        ground_n = normalize(mix(tp.normal, ta.normal, r));
+        tex_rough = mix(tp.rough, ta.rough, r);
+    }
 
     float puddle = smoothstep(0.52, 0.62, fbm(p * 0.12 + 3.7)) * road;
     float rain = frame.fog.w;
@@ -79,7 +92,9 @@ void main()
     // Neon signs and shopfronts light the wet street; puddles take sharp highlights.
     vec3 view_dir = normalize(in_world_pos - frame.camera_pos.xyz);
     vec3 neon_diffuse, neon_spec;
-    local_lights(vec3(p, 0.02), vec3(0.0, 0.0, 1.0), view_dir, mix(40.0, 600.0, puddle), neon_diffuse, neon_spec);
+    // Puddles are flat water; elsewhere the texture's relief catches the neon.
+    vec3 light_n = normalize(mix(ground_n, vec3(0.0, 0.0, 1.0), puddle));
+    local_lights(vec3(p, 0.02), light_n, view_dir, mix(40.0, 600.0, puddle), neon_diffuse, neon_spec);
     // Neon on the ground reads mostly as coloured wet sheen, so the diffuse term uses a
     // brighter "wet film" albedo than the dark asphalt itself.
     vec3 neon_albedo = mix(vec3(0.05), albedo * 2.0, 0.5);
@@ -100,5 +115,8 @@ void main()
 
     out_color = vec4(apply_fog(lit, in_world_pos), 1.0);
     // Reflectivity drives the screen-space reflection strength in the resolve pass.
-    out_material = vec4(wet, rough, ripple * 0.5 + 0.5);
+    // Texture relief perturbs the reflection too (not in puddles).
+    vec2 perturb = ripple + ground_n.xy * 0.6 * (1.0 - puddle);
+    rough = mix(rough, clamp(rough + (tex_rough - 0.5) * 0.4, 0.03, 0.8), 1.0 - puddle);
+    out_material = vec4(wet, rough, perturb * 0.5 + 0.5);
 }

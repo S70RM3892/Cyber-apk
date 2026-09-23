@@ -275,6 +275,9 @@ Renderer::~Renderer() {
     vk::destroy(ctx_, halos_);
     vk::destroy(ctx_, road_field_);
     vk::destroy(ctx_, sign_atlas_);
+    vk::destroy(ctx_, mat_albedo_);
+    vk::destroy(ctx_, mat_nrm_);
+    vkDestroySampler(dev, material_sampler_, nullptr);
     vk::destroy(ctx_, sign_strings_);
     vk::destroy(ctx_, road_staging_);
 }
@@ -290,6 +293,28 @@ void Renderer::create_static() {
     VK_CHECK(vkCreateSampler(dev, &si, nullptr, &linear_clamp_));
     si.magFilter = si.minFilter = VK_FILTER_NEAREST;
     VK_CHECK(vkCreateSampler(dev, &si, nullptr, &point_clamp_));
+    {
+        VkSamplerCreateInfo ms{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
+        ms.magFilter = ms.minFilter = VK_FILTER_LINEAR;
+        ms.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+        ms.addressModeU = ms.addressModeV = ms.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+        ms.maxLod = VK_LOD_CLAMP_NONE;
+        ms.anisotropyEnable = ctx_.anisotropy() ? VK_TRUE : VK_FALSE;
+        ms.maxAnisotropy = ctx_.anisotropy() ? std::min(8.0f, ctx_.properties().limits.maxSamplerAnisotropy) : 1.0f;
+        VK_CHECK(vkCreateSampler(dev, &ms, nullptr, &material_sampler_));
+    }
+    {
+        // Neutral stand-in until upload_materials: mid-grey albedo (x2 in the shader = 1),
+        // flat normal, medium roughness.
+        MaterialTextures neutral;
+        neutral.size = 1;
+        neutral.mips = 1;
+        for (std::uint32_t i = 0; i < MaterialTextures::kLayers; ++i) {
+            neutral.albedo.insert(neutral.albedo.end(), {188, 188, 188, 255});
+            neutral.nrm.insert(neutral.nrm.end(), {128, 128, 128, 255});
+        }
+        upload_materials_images(neutral);
+    }
 
     // Frame UBO: one slot per frame in flight, bound with a dynamic offset.
     const auto align = ctx_.properties().limits.minUniformBufferOffsetAlignment;
@@ -368,7 +393,7 @@ void Renderer::create_static() {
 
     // Descriptor set layouts.
     {
-        VkDescriptorSetLayoutBinding b[12]{};
+        VkDescriptorSetLayoutBinding b[14]{};
         const VkShaderStageFlags vf = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
         b[0] = {0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 1, vf, nullptr};
         b[1] = {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, vf, nullptr};
@@ -382,8 +407,10 @@ void Renderer::create_static() {
         b[9] = {9, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};  // light grid
         b[10] = {10, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};  // depth (halos)
         b[11] = {11, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT, nullptr};  // halos
+        b[12] = {12, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};  // material albedo
+        b[13] = {13, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};  // material normal/rough
         VkDescriptorSetLayoutCreateInfo ci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-        ci.bindingCount = 12;
+        ci.bindingCount = 14;
         ci.pBindings = b;
         VK_CHECK(vkCreateDescriptorSetLayout(dev, &ci, nullptr, &scene_set_layout_));
     }
@@ -415,7 +442,7 @@ void Renderer::create_static() {
     {
         VkDescriptorPoolSize sizes[] = {{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 1},
                                         {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 8},
-                                        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 3}};
+                                        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 5}};
         VkDescriptorPoolCreateInfo ci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
         ci.maxSets = 1;
         ci.poolSizeCount = 3;
@@ -499,7 +526,9 @@ void Renderer::write_scene_set() {
     VkDescriptorBufferInfo grid{light_grid_.buffer, 0, VK_WHOLE_SIZE};
     VkDescriptorBufferInfo hal{halos_.buffer, 0, VK_WHOLE_SIZE};
     VkDescriptorImageInfo depth{point_clamp_, depth_.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-    VkWriteDescriptorSet w[12]{};
+    VkDescriptorImageInfo malb{material_sampler_, mat_albedo_.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    VkDescriptorImageInfo mnrm{material_sampler_, mat_nrm_.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    VkWriteDescriptorSet w[14]{};
     for (auto& x : w) {
         x.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         x.dstSet = scene_set_;
@@ -542,7 +571,19 @@ void Renderer::write_scene_set() {
     w[11].dstBinding = 10;
     w[11].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     w[11].pImageInfo = &depth;
-    vkUpdateDescriptorSets(ctx_.device(), depth_.view ? 12 : 11, w, 0, nullptr);
+    w[12].dstBinding = 12;
+    w[12].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    w[12].pImageInfo = &malb;
+    w[13].dstBinding = 13;
+    w[13].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    w[13].pImageInfo = &mnrm;
+    // Depth (w[11]) is written once the size-dependent target exists.
+    if (depth_.view) {
+        vkUpdateDescriptorSets(ctx_.device(), 14, w, 0, nullptr);
+    } else {
+        std::swap(w[11], w[13]);
+        vkUpdateDescriptorSets(ctx_.device(), 13, w, 0, nullptr);
+    }
 }
 
 void Renderer::ensure_buffer(vk::Buffer& b, VkDeviceSize size, VkBufferUsageFlags usage) {
@@ -759,6 +800,53 @@ void Renderer::resize(VkExtent2D output_extent) {
     output_extent_ = output_extent;
     destroy_sized();
     create_sized();
+}
+
+void Renderer::upload_materials_images(const MaterialTextures& t) {
+    vk::destroy(ctx_, mat_albedo_);
+    vk::destroy(ctx_, mat_nrm_);
+    const VkImageUsageFlags usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    const std::uint32_t layers = MaterialTextures::kLayers;
+    mat_albedo_ = vk::create_image(ctx_, {t.size, t.size}, VK_FORMAT_R8G8B8A8_SRGB, usage, t.mips, layers);
+    mat_nrm_ = vk::create_image(ctx_, {t.size, t.size}, VK_FORMAT_R8G8B8A8_UNORM, usage, t.mips, layers);
+    const std::size_t bytes = t.albedo.size() + t.nrm.size();
+    vk::Buffer staging = vk::create_buffer(ctx_, bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, true);
+    std::memcpy(staging.mapped, t.albedo.data(), t.albedo.size());
+    std::memcpy(static_cast<char*>(staging.mapped) + t.albedo.size(), t.nrm.data(), t.nrm.size());
+    {
+        vk::OneShot os(ctx_);
+        for (const vk::Image* img : {&mat_albedo_, &mat_nrm_}) {
+            vk::transition(ctx_, os.cmd(), {img->image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                            VK_PIPELINE_STAGE_2_NONE, 0, VK_PIPELINE_STAGE_2_COPY_BIT,
+                                            VK_ACCESS_2_TRANSFER_WRITE_BIT});
+            // Data is layer-major, each layer a full mip chain.
+            std::vector<VkBufferImageCopy> copies;
+            VkDeviceSize offset = img == &mat_albedo_ ? 0 : t.albedo.size();
+            for (std::uint32_t l = 0; l < layers; ++l)
+                for (std::uint32_t m = 0, s = t.size; m < t.mips; ++m, s = std::max(1u, s / 2)) {
+                    VkBufferImageCopy c{};
+                    c.bufferOffset = offset;
+                    c.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, m, l, 1};
+                    c.imageExtent = {s, s, 1};
+                    copies.push_back(c);
+                    offset += VkDeviceSize{s} * s * 4;
+                }
+            vkCmdCopyBufferToImage(os.cmd(), staging.buffer, img->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                   static_cast<std::uint32_t>(copies.size()), copies.data());
+            vk::transition(ctx_, os.cmd(), {img->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_PIPELINE_STAGE_2_COPY_BIT,
+                                            VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                                            VK_ACCESS_2_SHADER_SAMPLED_READ_BIT});
+        }
+        os.submit_and_wait();
+    }
+    vk::destroy(ctx_, staging);
+}
+
+void Renderer::upload_materials(const MaterialTextures& t) {
+    vkDeviceWaitIdle(ctx_.device());
+    upload_materials_images(t);
+    write_scene_set();
 }
 
 void Renderer::upload_world(const CitySnapshot& snap) {

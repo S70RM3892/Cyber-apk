@@ -25,11 +25,13 @@ add_library(apex_core
     engine/src/citygen.cpp
     engine/src/world.cpp
     engine/src/buildgen.cpp
+    engine/src/materials.cpp
     engine/src/game.cpp
     engine/src/hud.cpp
     engine/src/audio.cpp
 )
 target_include_directories(apex_core PUBLIC engine/include)
+target_include_directories(apex_core PRIVATE third_party)
 target_compile_options(apex_core PRIVATE ${APEX_WARNINGS})
 find_package(Threads REQUIRED)
 target_link_libraries(apex_core PUBLIC Threads::Threads)
@@ -117,11 +119,13 @@ else()
     add_executable(apex_host host/main.cpp)
     target_compile_options(apex_host PRIVATE ${APEX_VK_WARNINGS})
     target_link_libraries(apex_host PRIVATE apex_renderer ZLIB::ZLIB)
+    target_compile_definitions(apex_host PRIVATE APEX_ASSET_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets/apk")
 
     include(CTest)
     if (BUILD_TESTING)
         add_executable(apex_tests tests/test_main.cpp)
         target_link_libraries(apex_tests PRIVATE apex_core)
+        target_compile_definitions(apex_tests PRIVATE APEX_ASSET_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets/apk")
         add_test(NAME apex_tests COMMAND apex_tests)
     endif()
 endif()

@@ -13,6 +13,8 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <fstream>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -21,6 +23,21 @@
 #include "apex/hud.hpp"
 #include "presenter.hpp"
 #include "renderer.hpp"
+
+namespace {
+
+// Material textures from the source tree (the APK packs the same files as assets).
+void load_materials(apex::Renderer& renderer) {
+    const auto t = apex::load_material_textures([](const std::string& name) -> std::optional<std::vector<std::uint8_t>> {
+        std::ifstream f(std::string(APEX_ASSET_DIR) + "/" + name, std::ios::binary);
+        if (!f) return std::nullopt;
+        return std::vector<std::uint8_t>(std::istreambuf_iterator<char>(f), {});
+    });
+    if (t) renderer.upload_materials(*t);
+    else std::fprintf(stderr, "warning: material textures not found under %s\n", APEX_ASSET_DIR);
+}
+
+}  // namespace
 
 namespace {
 
@@ -146,6 +163,7 @@ int run_present(const Args& args) {
     RenderSettings settings;
     settings.render_scale = args.scale;
     Renderer renderer(ctx, format, presenter.logical_extent(), settings);
+    load_materials(renderer);
 
     bool dirty = true;
     HudBuilder hud;
@@ -245,6 +263,7 @@ int main(int argc, char** argv) {
     if (args.traffic >= 0) settings.traffic_count = static_cast<std::uint32_t>(args.traffic);
     if (args.peds >= 0) settings.pedestrian_count = static_cast<std::uint32_t>(args.peds);
     Renderer renderer(ctx, VK_FORMAT_R8G8B8A8_UNORM, extent, settings);
+    load_materials(renderer);
     HudBuilder hud;
 
     vk::Image output = vk::create_image(ctx, extent, VK_FORMAT_R8G8B8A8_UNORM,

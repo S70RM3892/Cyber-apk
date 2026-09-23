@@ -39,18 +39,19 @@ bool is_depth_format(VkFormat f) {
 }
 
 Image create_image(const Context& ctx, VkExtent2D extent, VkFormat format, VkImageUsageFlags usage,
-                   std::uint32_t mip_levels) {
+                   std::uint32_t mip_levels, std::uint32_t array_layers) {
     Image img;
     img.format = format;
     img.extent = extent;
     img.mip_levels = mip_levels;
+    img.array_layers = array_layers;
 
     VkImageCreateInfo ci{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
     ci.imageType = VK_IMAGE_TYPE_2D;
     ci.format = format;
     ci.extent = {extent.width, extent.height, 1};
     ci.mipLevels = mip_levels;
-    ci.arrayLayers = 1;
+    ci.arrayLayers = array_layers;
     ci.samples = VK_SAMPLE_COUNT_1_BIT;
     ci.tiling = VK_IMAGE_TILING_OPTIMAL;
     ci.usage = usage;
@@ -67,11 +68,11 @@ Image create_image(const Context& ctx, VkExtent2D extent, VkFormat format, VkIma
 
     VkImageViewCreateInfo vi{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
     vi.image = img.image;
-    vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    vi.viewType = array_layers > 1 ? VK_IMAGE_VIEW_TYPE_2D_ARRAY : VK_IMAGE_VIEW_TYPE_2D;
     vi.format = format;
     vi.subresourceRange = {static_cast<VkImageAspectFlags>(is_depth_format(format) ? VK_IMAGE_ASPECT_DEPTH_BIT
                                                                                      : VK_IMAGE_ASPECT_COLOR_BIT),
-                           0, mip_levels, 0, 1};
+                           0, mip_levels, 0, array_layers};
     VK_CHECK(vkCreateImageView(ctx.device(), &vi, nullptr, &img.view));
     return img;
 }
@@ -108,7 +109,7 @@ void transition(const Context& ctx, VkCommandBuffer cmd, std::span<const ImageTr
         b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         b.image = t.image;
-        b.subresourceRange = {t.aspect, t.base_mip, t.mip_count, 0, 1};
+        b.subresourceRange = {t.aspect, t.base_mip, t.mip_count, 0, VK_REMAINING_ARRAY_LAYERS};
         barriers.push_back(b);
     }
     VkDependencyInfo dep{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};

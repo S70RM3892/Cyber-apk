@@ -23,13 +23,14 @@ struct Image {
     VkFormat format = VK_FORMAT_UNDEFINED;
     VkExtent2D extent{};
     std::uint32_t mip_levels = 1;
+    std::uint32_t array_layers = 1;
 };
 
 Buffer create_buffer(const Context& ctx, VkDeviceSize size, VkBufferUsageFlags usage, bool host_visible);
 void destroy(const Context& ctx, Buffer& b);
 
 Image create_image(const Context& ctx, VkExtent2D extent, VkFormat format, VkImageUsageFlags usage,
-                   std::uint32_t mip_levels = 1);
+                   std::uint32_t mip_levels = 1, std::uint32_t array_layers = 1);  // >1: 2D-array view
 void destroy(const Context& ctx, Image& img);
 
 // Extra single-mip view (for rendering into / sampling one level of a mip chain).
