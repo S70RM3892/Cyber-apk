@@ -49,7 +49,9 @@ public:
             case AMOTION_EVENT_ACTION_POINTER_DOWN: {
                 const int32_t id = AMotionEvent_getPointerId(e, index);
                 const float x = AMotionEvent_getX(e, index), y = AMotionEvent_getY(e, index);
-                if (car_button(width_, height_).contains(x, y)) {
+                if (time_button(width_, height_).contains(x, y)) {
+                    time_pending_ = true;
+                } else if (car_button(width_, height_).contains(x, y)) {
                     car_id_ = id;
                     car_pending_ = true;
                 } else if (jump_button(width_, height_).contains(x, y)) {
@@ -160,11 +162,17 @@ public:
     }
     bool jump_held() const { return jump_id_ >= 0; }
     bool car_held() const { return car_id_ >= 0; }
+    // True once per tap on the time-of-day button.
+    bool take_time_toggle() {
+        const bool t = time_pending_;
+        time_pending_ = false;
+        return t;
+    }
 
 private:
     float width_ = 1, height_ = 1;
     int32_t stick_id_ = -1, look_id_ = -1, jump_id_ = -1, car_id_ = -1;
-    bool jump_pending_ = false, car_pending_ = false;
+    bool jump_pending_ = false, car_pending_ = false, time_pending_ = false;
     float stick_origin_x_ = 0, stick_origin_y_ = 0, stick_x_ = 0, stick_y_ = 0;
     float look_last_x_ = 0, look_last_y_ = 0, look_dx_ = 0, look_dy_ = 0;
     bool sprint_ = false;
@@ -329,6 +337,10 @@ public:
         const float dt = std::chrono::duration<float>(now - last_frame_).count();
         last_frame_ = now;
         const Input in = controls_.consume(dt);
+        // Time of day: the button flips the target; the light eases over ~1.5 s.
+        if (controls_.take_time_toggle()) dusk_ = !dusk_;
+        float& daylight = renderer_->settings().daylight;
+        daylight += ((dusk_ ? 1.0f : 0.0f) - daylight) * std::min(1.0f, dt * 2.0f);
         game_->update(dt, in);
         AudioState as;
         as.player_speed = game_->player_speed();
@@ -350,6 +362,7 @@ public:
         hi.stick = controls_.stick();
         hi.jump_held = controls_.jump_held();
         hi.car_held = controls_.car_held();
+        hi.dusk = dusk_;
         // System bars / cutouts: the glue keeps the visible content rect (window pixels).
         if (app_->window) {
             const float ww = static_cast<float>(ANativeWindow_getWidth(app_->window));
@@ -376,6 +389,7 @@ public:
 
 private:
     android_app* app_;
+    bool dusk_ = false;
     std::unique_ptr<vk::Context> ctx_;
     std::unique_ptr<Presenter> presenter_;
     std::unique_ptr<Game> game_;

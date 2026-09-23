@@ -39,6 +39,9 @@ void main()
     if (player && abs(nl.y) > 0.5) e += vec3(1.0, 0.1, 0.6) * 2.5 * step(abs(l.z + 0.85), 0.12);  // side LED line
     if (abs(nl.y) > 0.5) e += vec3(0.1, 0.8, 1.0) * 1.5 * step(0.2, l.z) * step(abs(l.x), 0.6); // cabin strip
 
+    // Daylight on the paint (no world normal here: lit as if from above, sides dimmer).
+    vec3 paint = player ? vec3(0.55, 0.42, 0.05) : vec3(0.12, 0.12, 0.13);
+    body += paint * day_light(in_world_pos, vec3(0.0, 0.0, 1.0)) * (nl.z > 0.5 ? 0.6 : 0.3);
     out_color = vec4(apply_fog(body + e, in_world_pos), 1.0);
     out_material = vec4(0.0, 1.0, 0.5, 0.5);
 }

@@ -30,7 +30,7 @@ void main()
     // Denser-looking air further away: near halos stay faint, distant ones glow.
     float dist = distance(center, cam);
     float air = 1.0 - exp(-dist * 0.012);
-    out_color = h.color.rgb * air;
+    out_color = h.color.rgb * air * (1.0 - 0.8 * frame.sun.w);  // barely visible by day
     out_uv = c;
     out_view_z = dot(center - cam, fwd);
     out_radius = r;

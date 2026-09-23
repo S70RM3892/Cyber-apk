@@ -50,7 +50,7 @@ void main()
 
     vec3 lamps = lamp_light(in_world_pos) * 0.15 * clamp(n.z * 0.5 + 0.5, 0.2, 1.0);
     vec3 ambient = vec3(0.012, 0.018, 0.022) + vec3(0.03, 0.006, 0.008);
-    vec3 color = albedo * (ambient * 3.0 + lamps) + emissive;
+    vec3 color = albedo * (ambient * 3.0 + lamps + day_light(in_world_pos, n) * 1.5) + emissive;
     out_color = vec4(apply_fog(color, in_world_pos), 1.0);
     out_material = vec4(0.0, 1.0, 0.5, 0.5);
 }

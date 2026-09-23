@@ -54,7 +54,7 @@ vec3 shade_surface(Surface s, vec3 p, vec3 n, vec3 view_dir, vec3 ambient)
 {
     vec3 diffuse, spec;
     local_lights(p, n, view_dir, s.shininess, diffuse, spec);
-    return s.albedo * (ambient + diffuse * 0.6) + s.emissive + spec * s.specular;
+    return s.albedo * (ambient + diffuse * 0.6 + day_light(p, n)) + s.emissive + spec * s.specular;
 }
 
 // Anti-aliased box: 1 inside [lo, hi], filtered over the pixel footprint w.
@@ -295,7 +295,11 @@ Surface facade(float u, float v, uint seed, uint district, uint face_seed, vec3 
 
     // Dark tinted glass: a faint teal sheen.
     vec3 glass_refl = vec3(0.010, 0.020, 0.024) * (0.6 + 0.8 * pow(1.0 - abs(dot(view_dir, n)), 3.0));
-    s.emissive += (1.0 - shop) * (windows + glass * glass_refl * (1.0 - far_blend));
+    // By day most rooms are unlit behind reflective glass that mirrors the sky.
+    float d = daylight();
+    vec3 sky_refl = sky_color(reflect(view_dir, n)) * (0.25 + 0.75 * pow(1.0 - abs(dot(view_dir, n)), 3.0));
+    s.emissive += (1.0 - shop) * (windows * (1.0 - 0.8 * d) + glass * glass_refl * (1.0 - far_blend) +
+                                  glass * sky_refl * d * 0.6);
     if (shop > 0.0 && far_blend < 0.99) {
         // Shops are rooms too: 6 m bays, 7 m deep, lit in the bay's colour.
         vec3 light = mix(vec3(1.0, 0.85, 0.7), neon_color(shop_hash), 0.65) * shop_open * 0.22 + vec3(0.003);

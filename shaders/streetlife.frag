@@ -55,7 +55,7 @@ void main()
     // Lighting: street lamps from above (only on up-facing-ish surfaces) + ambient.
     vec3 lamp = lamp_light(p) * clamp(n.z * 0.5 + 0.5, 0.2, 1.0);
     vec3 ambient = vec3(0.02, 0.02, 0.04);
-    vec3 color = albedo * (ambient + lamp) + emissive;
+    vec3 color = albedo * (ambient + lamp + day_light(p, n) * 1.5) + emissive;
     out_color = vec4(apply_fog(color, p), 1.0);
     out_material = vec4(0.0, 1.0, 0.5, 0.5);
 }

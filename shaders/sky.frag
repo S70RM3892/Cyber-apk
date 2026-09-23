@@ -25,7 +25,9 @@ void main()
         float cover = smoothstep(0.2, 0.7, n);
         vec3 under_lit = mix(vec3(0.035, 0.018, 0.024), vec3(0.018, 0.032, 0.036), value_noise(cp * 0.0015));
         float horizon_fade = smoothstep(0.01, 0.25, dir.z);
-        c = mix(c, under_lit * (0.45 + 0.55 * n), cover * horizon_fade * 0.85);
+        // Dusk: thin cloud lit warm from the low sun.
+        vec3 lit_cloud = mix(under_lit, mix(vec3(0.55, 0.6, 0.68), vec3(1.0, 0.7, 0.5), pow(max(dot(dir, frame.sun.xyz), 0.0), 3.0)), frame.sun.w);
+        c = mix(c, lit_cloud * (0.45 + 0.55 * n), cover * horizon_fade * mix(0.85, 0.5, frame.sun.w));
     }
 
     out_color = vec4(c, 1.0);

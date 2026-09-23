@@ -124,6 +124,24 @@ float glyph_distance(uint g, vec2 uv)
     return (d - 0.5) * kGlyphSdfScale;
 }
 
+// ---- Daylight (dusk mode; frame.sun.w = 0 at night) --------------------------------
+float daylight() { return frame.sun.w; }
+const vec3 kSunColor = vec3(1.0, 0.58, 0.32);
+const vec3 kSkyFill = vec3(0.30, 0.40, 0.55);
+
+// Irradiance from the low sun and the open sky. Street canyons are in shade: direct sun
+// reaches walls more the higher they are, the street hardly at all.
+vec3 day_light(vec3 p, vec3 n)
+{
+    float d = daylight();
+    if (d <= 0.0) return vec3(0.0);
+    vec3 s = frame.sun.xyz;
+    float canyon = smoothstep(6.0, 70.0, p.z) * 0.9 + 0.1;
+    float sun = max(dot(n, s), 0.0) * canyon;
+    float sky = 0.55 + 0.45 * n.z;
+    return d * (kSunColor * 2.6 * sun + kSkyFill * 0.55 * sky);
+}
+
 // Fraction of light lost to fog between the camera and world_pos (see apply_fog).
 float fog_amount(vec3 world_pos)
 {
@@ -148,6 +166,11 @@ vec3 apply_fog(vec3 color, vec3 world_pos)
     vec3 dir = normalize(d);
     vec3 smog = mix(vec3(0.036, 0.042, 0.046), vec3(0.012, 0.020, 0.025), clamp(dir.z * 2.0, 0.0, 1.0));
     vec3 in_scatter = smog * 0.75 + vec3(0.04, 0.007, 0.008) * exp(-max(world_pos.z, 0.0) / 15.0);
+    // Dusk: bright blue-grey aerial haze, warm towards the sun (forward scattering), so
+    // distant towers fade into pale blue silhouettes.
+    float toward_sun = pow(max(dot(dir, frame.sun.xyz), 0.0), 6.0);
+    vec3 day_haze = mix(vec3(0.30, 0.42, 0.58), vec3(1.0, 0.72, 0.48) * 1.4, toward_sun) * 0.85;
+    in_scatter = mix(in_scatter, day_haze, daylight());
     return mix(color, in_scatter, amount);
 }
 

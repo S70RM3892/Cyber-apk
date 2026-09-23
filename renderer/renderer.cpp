@@ -29,8 +29,9 @@ struct FrameUniforms {
     float fog[4];
     float objective[4];
     float player_car[4];
+    float sun[4];
 };
-static_assert(sizeof(FrameUniforms) == 352);
+static_assert(sizeof(FrameUniforms) == 368);
 
 constexpr VkFormat kSceneColorFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
 constexpr VkFormat kMaterialFormat = VK_FORMAT_R8G8B8A8_UNORM;
@@ -941,10 +942,19 @@ void Renderer::update_frame_ubo(std::uint32_t slot, const Game& game) {
     u.viewport[1] = static_cast<float>(internal_.height);
     u.viewport[2] = 1.0f / u.viewport[0];
     u.viewport[3] = 1.0f / u.viewport[1];
-    u.fog[0] = settings_.fog_density;
+    u.fog[0] = settings_.fog_density * (1.0f - 0.45f * settings_.daylight);  // clearer air at dusk
     u.fog[1] = 0.018f;
     u.fog[2] = 0.97f;
-    u.fog[3] = settings_.rain;
+    // Dusk is dry and clear; night keeps its rain.
+    u.fog[3] = settings_.rain * (1.0f - settings_.daylight);
+    {
+        // Low sun, ~9 degrees up, in the south-west.
+        const Vec3 sun = normalize(Vec3{-0.62f, -0.76f, 0.16f});
+        u.sun[0] = sun.x;
+        u.sun[1] = sun.y;
+        u.sun[2] = sun.z;
+        u.sun[3] = settings_.daylight;
+    }
     const Gig& gig = game.gig();
     u.objective[0] = gig.target.x;
     u.objective[1] = gig.target.y;
@@ -1108,7 +1118,7 @@ void Renderer::record(VkCommandBuffer cmd, std::uint32_t slot, const Game& game,
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, lights_pso_);
             vkCmdDraw(cmd, 6, light_count_, 0, 0);
         }
-        if (settings_.rain > 0.0f) {
+        if (settings_.rain * (1.0f - settings_.daylight) > 0.0f) {
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, rain_pso_);
             vkCmdDraw(cmd, 6, 6000, 0, 0);
         }
@@ -1176,7 +1186,10 @@ void Renderer::record(VkCommandBuffer cmd, std::uint32_t slot, const Game& game,
                                        kAnyFragmentWork, 0, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
                                        VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT});
             const float push[4] = {1.0f / static_cast<float>(src_extent.width),
-                                   1.0f / static_cast<float>(src_extent.height), i == 0 ? 1.0f : 0.0f, 1.2f};  // threshold: neon / screens bloom, lit windows don't
+                                   1.0f / static_cast<float>(src_extent.height), i == 0 ? 1.0f : 0.0f,
+                                   // Threshold: neon / screens bloom, lit windows don't; by day
+                                   // sunlit walls are brighter, so the bar rises.
+                                   1.2f * (1.0f + 3.0f * settings_.daylight)};
             fullscreen_pass(cmd, bloom_[i].view, bloom_[i].extent, bloom_down_pso_, bloom_down_sets_[i], slot, push,
                             sizeof(push), false);
             vk::transition(ctx_, cmd, {bloom_[i].image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
@@ -1215,7 +1228,8 @@ void Renderer::record(VkCommandBuffer cmd, std::uint32_t slot, const Game& game,
         struct {
             float exposure, bloom, time, srgb;
             std::int32_t rotation, pad[3];
-        } push{settings_.exposure, settings_.bloom_strength, game.time(), srgb ? 1.0f : 0.0f, target.pre_rotation, {}};
+        } push{settings_.exposure * (1.0f - 0.55f * settings_.daylight), settings_.bloom_strength, game.time(),
+               srgb ? 1.0f : 0.0f, target.pre_rotation, {}};
         fullscreen_pass(cmd, target.view, target.extent, tonemap_pso_, tonemap_set_, slot, &push, sizeof(push), false);
 
         if (!hud.empty()) {

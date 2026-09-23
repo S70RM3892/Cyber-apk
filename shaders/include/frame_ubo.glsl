@@ -14,6 +14,7 @@ layout(set = 0, binding = 0) uniform Frame {
     vec4 fog;           // x density, y height falloff, z max opacity, w rain intensity
     vec4 objective;     // xy gig beacon position, z seconds since issued, w 1 = active
     vec4 player_car;    // xy position, z yaw, w 1 = spawned
+    vec4 sun;           // xyz direction towards the sun, w daylight (0 = night, 1 = dusk)
 } frame;
 
 #endif

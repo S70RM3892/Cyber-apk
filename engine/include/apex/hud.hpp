@@ -42,6 +42,7 @@ struct HudInput {
     // Screen area covered by system UI, cutouts or rounded corners (logical pixels).
     float inset_left = 0, inset_top = 0, inset_right = 0, inset_bottom = 0;
     bool show_perf = false;  // FPS / resolution / GPU readout: developer builds only
+    bool dusk = false;       // current time of day (the time button offers the other one)
 };
 
 class HudBuilder {
@@ -69,6 +70,7 @@ struct HudButton {
 };
 HudButton jump_button(float width, float height);
 HudButton car_button(float width, float height);
+HudButton time_button(float width, float height);  // night <-> dusk
 
 // Lay out the game HUD (status panel, compass, gig tracker, crosshair, controls).
 void build_hud(HudBuilder& hud, const Game& game, const HudInput& in);

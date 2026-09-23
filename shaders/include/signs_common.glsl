@@ -268,6 +268,8 @@ void main()
         }
     }
 
+    // LED ads and lit signs are made to be read in daylight: brighter by day.
+    emissive *= 1.0 + 1.2 * frame.sun.w;
     out_color = vec4(apply_fog(plate + emissive * broken, in_world_pos), 1.0);
     out_material = vec4(0.0, 1.0, 0.5, 0.5);
 }

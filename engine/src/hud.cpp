@@ -106,6 +106,12 @@ HudButton car_button(float width, float height) {
     return {j.cx - 20.0f * u, j.cy - 140.0f * u, 44.0f * u};
 }
 
+HudButton time_button(float width, float height) {
+    // Top-right corner, inside the same safe margins as the rest of the HUD.
+    const float u = height / 720.0f, r = 30.0f * u;
+    return {width - width * 0.045f - 24.0f * u - r, height * 0.02f + 24.0f * u + r, r};
+}
+
 void build_hud(HudBuilder& hud, const Game& game, const HudInput& in) {
     hud.clear();
     // Scale everything from a 720p-tall reference so the HUD is the same physical size
@@ -211,6 +217,16 @@ void build_hud(HudBuilder& hud, const Game& game, const HudInput& in) {
             hud.text(line, in.width * 0.5f - w * 0.5f, in.height * 0.32f, px * 1.6f, kYellow[0] * 1.5f,
                      kYellow[1] * 1.5f, kYellow[2], a);
         }
+    }
+
+    // ---- Time of day ----
+    {
+        const HudButton tb = time_button(in.width, in.height);
+        hud.ring(tb.cx, tb.cy, tb.radius, 0.0f, 0.0f, 0.0f, 0.0f, 0.3f);
+        hud.ring(tb.cx, tb.cy, tb.radius, 0.08f, kYellow[0], kYellow[1], kYellow[2], 0.35f);
+        const char* label = in.dusk ? "NIGHT" : "DUSK";
+        hud.text(label, tb.cx - HudBuilder::text_width(label, px * 0.7f) * 0.5f, tb.cy - 3.5f * px * 0.7f, px * 0.7f,
+                 1.0f, 1.0f, 1.0f, 0.75f);
     }
 
     // ---- Crosshair ----

@@ -53,7 +53,7 @@ void main()
     // Street lamps light the piers from below; a little neon spill everywhere.
     vec3 lamps = lamp_light(vec3(p.xy, max(p.z - 4.0, 0.0))) * 0.25;
     vec3 ambient = vec3(0.012, 0.018, 0.021) + vec3(0.03, 0.006, 0.008) * exp(-p.z / 20.0);
-    vec3 color = albedo * (ambient * 4.0 + lamps) + emissive;
+    vec3 color = albedo * (ambient * 4.0 + lamps + day_light(p, n) * 1.5) + emissive;
     out_color = vec4(apply_fog(color, p), 1.0);
     out_material = material;
 }

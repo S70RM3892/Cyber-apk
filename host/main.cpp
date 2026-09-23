@@ -97,6 +97,7 @@ struct Args {
     bool hud = true;
     bool hud_stick = false;
     bool perf = false;  // show the FPS / GPU readout in the HUD
+    bool dusk = false;  // hazy dusk instead of rainy night
     bool face_gig = false;
     float drive_seconds = 0;
     int traffic = -1;
@@ -127,6 +128,7 @@ Args parse(int argc, char** argv) {
         else if (k == "--no-hud") a.hud = false;
         else if (k == "--hud-stick") a.hud_stick = true;
         else if (k == "--perf") a.perf = true;
+        else if (k == "--dusk") a.dusk = true;
         else if (k == "--face-gig") a.face_gig = true;
         else if (k == "--drive") a.drive_seconds = std::stof(next());
         else if (k == "--traffic") a.traffic = std::stoi(next());
@@ -162,6 +164,7 @@ int run_present(const Args& args) {
     presenter.attach(surface, format, {args.width, args.height});
     RenderSettings settings;
     settings.render_scale = args.scale;
+    settings.daylight = args.dusk ? 1.0f : 0.0f;
     Renderer renderer(ctx, format, presenter.logical_extent(), settings);
     load_materials(renderer);
 
@@ -259,6 +262,7 @@ int main(int argc, char** argv) {
     const VkExtent2D extent{args.width, args.height};
     RenderSettings settings;
     settings.render_scale = args.scale;
+    settings.daylight = args.dusk ? 1.0f : 0.0f;
     settings.dynamic_resolution = false;  // deterministic screenshots
     if (args.traffic >= 0) settings.traffic_count = static_cast<std::uint32_t>(args.traffic);
     if (args.peds >= 0) settings.pedestrian_count = static_cast<std::uint32_t>(args.peds);
@@ -307,6 +311,7 @@ int main(int argc, char** argv) {
         HudInput hi;
         hi.width = static_cast<float>(extent.width);
         hi.show_perf = args.perf;
+        hi.dusk = args.dusk;
         hi.height = static_cast<float>(extent.height);
         hi.fps = 60.0f;
         hi.render_scale = settings.render_scale;
