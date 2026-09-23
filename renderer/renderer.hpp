@@ -94,6 +94,8 @@ private:
     vk::Buffer buildings_, signs_, props_, lights_;
     vk::Buffer mesh_vertices_, mesh_indices_;  // detailed building meshes
     vk::Buffer point_lights_, light_grid_;     // local lights (signs, shopfronts) + 2D grid
+    vk::Buffer halos_;                         // smog halos around big lights
+    std::uint32_t halo_count_ = 0;
     std::vector<MeshChunk> mesh_chunks_;
     Mat4 view_proj_;
     std::uint32_t building_count_ = 0, sign_count_ = 0, prop_count_ = 0, light_count_ = 0;
@@ -122,7 +124,8 @@ private:
                sky_pso_ = VK_NULL_HANDLE, rain_pso_ = VK_NULL_HANDLE, traffic_pso_ = VK_NULL_HANDLE,
                streetlife_pso_ = VK_NULL_HANDLE, beacon_pso_ = VK_NULL_HANDLE,
                signs_glow_pso_ = VK_NULL_HANDLE, props_pso_ = VK_NULL_HANDLE, lights_pso_ = VK_NULL_HANDLE,
-               infra_pso_ = VK_NULL_HANDLE, detail_pso_ = VK_NULL_HANDLE;
+               infra_pso_ = VK_NULL_HANDLE, detail_pso_ = VK_NULL_HANDLE,
+               halo_pso_ = VK_NULL_HANDLE;
     VkPipeline resolve_pso_ = VK_NULL_HANDLE, bloom_down_pso_ = VK_NULL_HANDLE, bloom_up_pso_ = VK_NULL_HANDLE,
                tonemap_pso_ = VK_NULL_HANDLE;
 

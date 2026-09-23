@@ -97,6 +97,7 @@ struct CitySnapshot {
     CityMesh mesh;
     std::vector<PointLight> point_lights;
     std::vector<std::uint32_t> light_grid;
+    std::vector<PointLight> halos;  // glow in the smog around the biggest lights (halo.vert)
     RoadField roads;
 };
 

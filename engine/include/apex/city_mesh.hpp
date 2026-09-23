@@ -22,6 +22,8 @@ enum class SurfaceMaterial : std::uint8_t {
     Louvre = 11,     // mechanical-floor grille
     SawGlass = 12,   // sawtooth roof glazing, lit from inside
     LitPanel = 13,   // canopy soffit with light panels
+    Vending = 14,    // vending machine front: lit product rows
+    Plastic = 15,    // glossy bin bags, crates
 };
 
 struct MeshVertex {

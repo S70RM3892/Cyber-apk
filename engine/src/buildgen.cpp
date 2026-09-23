@@ -730,6 +730,55 @@ void shanty(Builder& g, const city::Building& b, MeshDetail detail) {
 
 }  // namespace
 
+// ---- Street clutter along the sidewalk --------------------------------------------
+// Vending machines (each a small light source), bin-bag piles and utility boxes against
+// the ground floor: the near layer of every street view.
+void street_clutter(Builder& g, const city::Building& b, MeshDetail detail) {
+    if (detail != MeshDetail::Full) return;
+    Rng rng{building_hash(b) ^ 0xc177u};
+    const Plan p{b.x, b.y, b.footprint * 0.5f};
+    for (int k = 0; k < 4; ++k) {
+        const Face f = face_of(p, k);
+        // Vending machines, often in a row of two or three.
+        if (rng.chance(b.shanty ? 0.35f : 0.55f)) {
+            const int n = 1 + rng.index(3);
+            const float w = 0.95f;
+            float a = rng.range(-f.half_len + 1.0f, f.half_len - 1.0f - w * static_cast<float>(n));
+            for (int i = 0; i < n; ++i, a += w + 0.05f) {
+                if (!g.clear(f.bounds(a, a + w, 0.0f, 0.8f, 0.0f, 1.95f))) continue;
+                face_box(g, f, a, a + w, 0.0f, 0.78f, 0.0f, 1.9f, M::Metal, M::Metal, M::Metal);
+                // Lit front, a hair in front of the box.
+                const V2 p0 = f.point(a + 0.04f, 0.79f), p1 = f.point(a + w - 0.04f, 0.79f);
+                g.wall_quad(at(p0, 0.05f), at(p1, 0.05f), at(p1, 1.85f), at(p0, 1.85f), a, a + w, M::Vending);
+                g.light(at(f.point(a + w * 0.5f, 1.4f), 1.2f), {0.8f, 0.9f, 1.0f}, 5.0f);
+            }
+        }
+        // Bin bags heaped against the wall.
+        if (rng.chance(0.5f)) {
+            const float a = rng.range(-f.half_len + 0.8f, f.half_len - 0.8f);
+            const int bags = 3 + rng.index(5);
+            for (int i = 0; i < bags; ++i) {
+                const float ba = a + rng.range(-0.9f, 0.9f), bo = rng.range(0.25f, 1.0f);
+                const float r = rng.range(0.22f, 0.34f), hz = r * rng.range(1.4f, 1.9f);
+                const float z0 = i >= bags - 2 ? rng.range(0.2f, 0.4f) : 0.0f;  // a couple on top
+                if (!g.clear(f.bounds(ba - r, ba + r, bo - r, bo + r, z0, z0 + hz))) continue;
+                g.box(f.point(ba, bo), f.t * std::cos(rng.range(0.0f, 1.5f)) + f.n * std::sin(rng.range(0.0f, 1.5f)),
+                      r, r * 0.85f, z0, z0 + hz, M::Plastic, M::Plastic, M::Plastic);
+            }
+        }
+        // Utility / meter boxes and a conduit up the wall.
+        if (rng.chance(0.45f)) {
+            const float a = rng.range(-f.half_len + 0.6f, f.half_len - 0.6f);
+            const float z = rng.range(1.0f, 1.6f);
+            if (g.clear(f.bounds(a - 0.4f, a + 0.4f, 0.0f, 0.3f, z, std::min(b.height, 8.0f))))  {
+                face_box(g, f, a - 0.35f, a + 0.35f, 0.0f, 0.25f, z, z + 0.8f, M::Metal, M::Metal, M::Metal);
+                face_box(g, f, a - 0.05f, a + 0.05f, 0.02f, 0.12f, z + 0.8f, std::min(b.height, 8.0f), M::Metal, M::Metal,
+                         M::Metal);
+            }
+        }
+    }
+}
+
 void build_building_mesh(const city::Building& b, std::uint32_t building_index, std::span<const SignInstance> signs,
                          MeshDetail detail, CityMesh& out, std::vector<PointLight>& lights) {
     Builder g(out, building_index, signs, lights);
@@ -737,6 +786,7 @@ void build_building_mesh(const city::Building& b, std::uint32_t building_index, 
     if (b.shanty) shanty(g, b, detail);
     else if (m.tower) tower(g, b, m, detail);
     else block(g, b, m, detail);
+    street_clutter(g, b, detail);
 
     // Steel frames carrying the billboards that stand above the roof.
     for (const SignInstance& s : signs) {

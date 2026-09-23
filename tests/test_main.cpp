@@ -225,7 +225,7 @@ void test_building_meshes() {
         const float n2 = static_cast<float>(v.nx * v.nx + v.ny * v.ny + v.nz * v.nz) / (127.0f * 127.0f);
         CHECK(n2 > 0.9f && n2 < 1.1f);
         CHECK(std::isfinite(v.x) && std::isfinite(v.y) && v.z >= -0.01f && v.z < 700.0f);
-        CHECK((v.building_material >> 24) <= static_cast<std::uint32_t>(SurfaceMaterial::LitPanel));
+        CHECK((v.building_material >> 24) <= static_cast<std::uint32_t>(SurfaceMaterial::Plastic));
         max_building = std::max(max_building, v.building_material & 0xFFFFFFu);
     }
     CHECK(max_building < snap->buildings.size());

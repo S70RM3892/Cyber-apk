@@ -15,6 +15,7 @@ namespace {
 static_assert(signtext::kCols == 16 && signtext::kRows == 9 && signtext::kCell == 48 && signtext::kSpread == 6.0f,
               "shaders/include/city_common.glsl hard-codes the sign atlas layout");
 static_assert(signtext::kGlyphChoonpu == 44, "city_common.glsl kGlyphChoonpu");
+static_assert(signtext::kJapaneseCount == 52, "signs_common.glsl kJapaneseStrings");
 
 // std140 mirror of shaders/include/frame_ubo.glsl.
 struct FrameUniforms {
@@ -245,7 +246,7 @@ Renderer::~Renderer() {
     vkDeviceWaitIdle(dev);
     destroy_sized();
     for (VkPipeline p : {ground_pso_, buildings_pso_, signs_pso_, sky_pso_, rain_pso_, traffic_pso_, streetlife_pso_,
-                         beacon_pso_, signs_glow_pso_, props_pso_, lights_pso_, infra_pso_, detail_pso_, resolve_pso_,
+                         beacon_pso_, signs_glow_pso_, props_pso_, lights_pso_, infra_pso_, detail_pso_, halo_pso_, resolve_pso_,
                          bloom_down_pso_,
                          bloom_up_pso_, tonemap_pso_})
         vkDestroyPipeline(dev, p, nullptr);
@@ -271,6 +272,7 @@ Renderer::~Renderer() {
     vk::destroy(ctx_, mesh_indices_);
     vk::destroy(ctx_, point_lights_);
     vk::destroy(ctx_, light_grid_);
+    vk::destroy(ctx_, halos_);
     vk::destroy(ctx_, road_field_);
     vk::destroy(ctx_, sign_atlas_);
     vk::destroy(ctx_, sign_strings_);
@@ -300,6 +302,7 @@ void Renderer::create_static() {
     ensure_buffer(props_, 64 * sizeof(PropInstance));
     ensure_buffer(lights_, 64 * sizeof(LightSprite));
     ensure_buffer(point_lights_, 64 * sizeof(PointLight));
+    ensure_buffer(halos_, 64 * sizeof(PointLight));
     // An empty grid (all cells zero lights) until the first snapshot arrives.
     ensure_buffer(light_grid_, kLightGridCells * 2 * sizeof(std::uint32_t));
     std::memset(light_grid_.mapped, 0, kLightGridCells * 2 * sizeof(std::uint32_t));
@@ -365,7 +368,7 @@ void Renderer::create_static() {
 
     // Descriptor set layouts.
     {
-        VkDescriptorSetLayoutBinding b[10]{};
+        VkDescriptorSetLayoutBinding b[12]{};
         const VkShaderStageFlags vf = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
         b[0] = {0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 1, vf, nullptr};
         b[1] = {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, vf, nullptr};
@@ -377,8 +380,10 @@ void Renderer::create_static() {
         b[7] = {7, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, vf, nullptr};  // light sprites
         b[8] = {8, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};  // point lights
         b[9] = {9, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};  // light grid
+        b[10] = {10, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};  // depth (halos)
+        b[11] = {11, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT, nullptr};  // halos
         VkDescriptorSetLayoutCreateInfo ci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-        ci.bindingCount = 10;
+        ci.bindingCount = 12;
         ci.pBindings = b;
         VK_CHECK(vkCreateDescriptorSetLayout(dev, &ci, nullptr, &scene_set_layout_));
     }
@@ -409,8 +414,8 @@ void Renderer::create_static() {
     // Scene set lives in a pool that survives resizes.
     {
         VkDescriptorPoolSize sizes[] = {{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 1},
-                                        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 7},
-                                        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2}};
+                                        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 8},
+                                        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 3}};
         VkDescriptorPoolCreateInfo ci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
         ci.maxSets = 1;
         ci.poolSizeCount = 3;
@@ -492,7 +497,9 @@ void Renderer::write_scene_set() {
     VkDescriptorBufferInfo lts{lights_.buffer, 0, VK_WHOLE_SIZE};
     VkDescriptorBufferInfo pls{point_lights_.buffer, 0, VK_WHOLE_SIZE};
     VkDescriptorBufferInfo grid{light_grid_.buffer, 0, VK_WHOLE_SIZE};
-    VkWriteDescriptorSet w[10]{};
+    VkDescriptorBufferInfo hal{halos_.buffer, 0, VK_WHOLE_SIZE};
+    VkDescriptorImageInfo depth{point_clamp_, depth_.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    VkWriteDescriptorSet w[12]{};
     for (auto& x : w) {
         x.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         x.dstSet = scene_set_;
@@ -528,7 +535,14 @@ void Renderer::write_scene_set() {
     w[9].dstBinding = 9;
     w[9].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     w[9].pBufferInfo = &grid;
-    vkUpdateDescriptorSets(ctx_.device(), 10, w, 0, nullptr);
+    w[10].dstBinding = 11;
+    w[10].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    w[10].pBufferInfo = &hal;
+    // The depth target is size-dependent: written once it exists (create_sized rewrites it).
+    w[11].dstBinding = 10;
+    w[11].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    w[11].pImageInfo = &depth;
+    vkUpdateDescriptorSets(ctx_.device(), depth_.view ? 12 : 11, w, 0, nullptr);
 }
 
 void Renderer::ensure_buffer(vk::Buffer& b, VkDeviceSize size, VkBufferUsageFlags usage) {
@@ -575,6 +589,17 @@ void Renderer::create_pipelines() {
         m.vertex_bindings = std::span(&binding, 1);
         m.vertex_attributes = attrs;
         detail_pso_ = make_pipeline(ctx_, m);
+    }
+    {
+        // Smog halos: additive into the resolved image, no depth attachment (the shader
+        // reads depth to fade softly into geometry).
+        PipelineDesc hd;
+        hd.vs = sh::halo_vert;
+        hd.fs = sh::halo_frag;
+        hd.layout = scene_layout_;
+        hd.color_formats = {kSceneColorFormat};
+        hd.blend = Blend::Additive;
+        halo_pso_ = make_pipeline(ctx_, hd);
     }
 
     d.vs = sh::traffic_vert;
@@ -716,6 +741,7 @@ void Renderer::create_sized() {
         bloom_up_sets_[i] = alloc(up_src, linear_clamp_, VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE);
     }
     tonemap_set_ = alloc(resolved_.view, linear_clamp_, bloom_[0].view, linear_clamp_, VK_NULL_HANDLE, VK_NULL_HANDLE);
+    if (scene_set_) write_scene_set();  // the halo pass samples the new depth target
 }
 
 void Renderer::destroy_sized() {
@@ -762,6 +788,10 @@ void Renderer::upload_world(const CitySnapshot& snap) {
     ensure_buffer(light_grid_, gsize);
     if (plsize) std::memcpy(point_lights_.mapped, snap.point_lights.data(), plsize);
     if (gsize) std::memcpy(light_grid_.mapped, snap.light_grid.data(), gsize);
+    const VkDeviceSize hsize = snap.halos.size() * sizeof(PointLight);
+    ensure_buffer(halos_, hsize);
+    if (hsize) std::memcpy(halos_.mapped, snap.halos.data(), hsize);
+    halo_count_ = static_cast<std::uint32_t>(snap.halos.size());
     building_count_ = static_cast<std::uint32_t>(snap.buildings.size());
     sign_count_ = static_cast<std::uint32_t>(snap.signs.size());
     prop_count_ = static_cast<std::uint32_t>(snap.props.size());
@@ -989,6 +1019,35 @@ void Renderer::record(VkCommandBuffer cmd, std::uint32_t slot, const Game& game,
         vk::transition(ctx_, cmd, ts);
         const std::int32_t steps[4] = {settings_.ssr_steps, 0, 0, 0};
         fullscreen_pass(cmd, resolved_.view, internal_, resolve_pso_, resolve_set_, slot, steps, sizeof(steps), false);
+        if (halo_count_) {
+            // Resolve wrote this attachment: order it before the additive halos.
+            VkMemoryBarrier2 mb{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+            mb.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+            mb.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+            mb.dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+            mb.dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+            VkDependencyInfo dep{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+            dep.memoryBarrierCount = 1;
+            dep.pMemoryBarriers = &mb;
+            fns.cmd_pipeline_barrier2(cmd, &dep);
+            VkRenderingAttachmentInfo color{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+            color.imageView = resolved_.view;
+            color.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            color.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+            color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+            VkRenderingInfo ri{VK_STRUCTURE_TYPE_RENDERING_INFO};
+            ri.renderArea = {{0, 0}, internal_};
+            ri.layerCount = 1;
+            ri.colorAttachmentCount = 1;
+            ri.pColorAttachments = &color;
+            fns.cmd_begin_rendering(cmd, &ri);
+            set_viewport(cmd, internal_);
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, halo_pso_);
+            const std::uint32_t offset = static_cast<std::uint32_t>(slot * ubo_stride_);
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, scene_layout_, 0, 1, &scene_set_, 1, &offset);
+            vkCmdDraw(cmd, 6, halo_count_, 0, 0);
+            fns.cmd_end_rendering(cmd);
+        }
         vk::transition(ctx_, cmd, {resolved_.image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
                                    VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,

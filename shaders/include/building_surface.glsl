@@ -24,6 +24,8 @@ const uint kMatLedRed = 10u;
 const uint kMatLouvre = 11u;
 const uint kMatSawGlass = 12u;
 const uint kMatLitPanel = 13u;
+const uint kMatVending = 14u;
+const uint kMatPlastic = 15u;
 
 struct Surface {
     vec3 albedo;      // diffuse reflectance (pre-scaled: multiplied with ambient + local light)

@@ -43,10 +43,15 @@ Massing massing_of(const city::Building& b) {
         // Shaft plan: square, chamfered or octagonal.
         const float rc = unit(city::hash64(building_hash(b) ^ 0xc07));
         m.shaft_cut = rc < 0.35f ? 0.0f : rc < 0.75f ? 0.15f + 0.3f * (rc - 0.35f) : 0.586f;
-    } else if (b.district == city::District::Residential && b.height > 30.0f) {
+    } else if (b.district == city::District::Residential && b.height > 18.0f) {
+        // Every mid-rise gets a setback: the upper floors step in (spec: >= 2 tiers).
         m.stepped = true;
         m.base_top = b.height * (0.55f + 0.2f * r);
-        m.top_footprint = b.footprint * 0.8f;
+        m.top_footprint = b.footprint * (0.72f + 0.12f * r);
+    } else if (b.district == city::District::Industrial && b.height > 14.0f && !has_sawtooth_roof(b)) {
+        m.stepped = true;
+        m.base_top = b.height * (0.6f + 0.2f * r);
+        m.top_footprint = b.footprint * (0.6f + 0.2f * r);
     }
     return m;
 }
@@ -104,16 +109,28 @@ void place_signs(const city::Building& b, std::vector<SignInstance>& out) {
 
     int count = 0;
     switch (b.district) {
-        case city::District::Megastructure: count = 9; break;
-        case city::District::Corporate: count = 7; break;
-        case city::District::Residential: count = 8; break;
-        case city::District::Industrial: count = 3; break;
+        // Dense, layered street signage (visual fix spec: at least 3x the original).
+        case city::District::Megastructure: count = 27; break;
+        case city::District::Corporate: count = 16; break;
+        case city::District::Residential: count = 24; break;
+        case city::District::Industrial: count = 9; break;
         case city::District::Count: break;
     }
-    if (b.shanty) count = 2;  // small shops: a sign or two each
+    if (b.shanty) count = 6;  // small shops: several signs each
 
     const float half = b.footprint * 0.5f;
     const Massing mass = massing_of(b);
+    // Plan-view extents of the wall signs placed so far, to keep them from overlapping.
+    struct Extent {
+        float x0, y0, z0, x1, y1, z1;
+    };
+    std::vector<Extent> placed;
+    auto extent_of = [](const SignInstance& s) {
+        const float hw = s.width * 0.5f + 0.15f, t = 0.35f;
+        const float c = std::fabs(std::cos(s.yaw)), sn = std::fabs(std::sin(s.yaw));
+        const float ex = sn * hw + c * t, ey = c * hw + sn * t;
+        return Extent{s.x - ex, s.y - ey, s.z - s.height * 0.5f - 0.15f, s.x + ex, s.y + ey, s.z + s.height * 0.5f + 0.15f};
+    };
     for (int i = 0; i < count; ++i) {
         // Face 0..3: +X, +Y, -X, -Y. The sign's yaw points along the outward normal.
         const int face = static_cast<int>(next() * 4.0f) & 3;
@@ -152,7 +169,14 @@ void place_signs(const city::Building& b, std::vector<SignInstance>& out) {
         s.z = std::min(z, mass.base_top - s.height * 0.5f);
         if (s.z - s.height * 0.5f < 2.5f) s.z = 2.5f + s.height * 0.5f;  // keep head clearance
         // Too tall for the wall it hangs on (short podium, long string): skip it.
-        if (s.z + s.height * 0.5f <= mass.base_top) out.push_back(s);
+        if (s.z + s.height * 0.5f > mass.base_top) continue;
+        const Extent e = extent_of(s);
+        const bool clash = std::any_of(placed.begin(), placed.end(), [&](const Extent& o) {
+            return e.x0 < o.x1 && o.x0 < e.x1 && e.y0 < o.y1 && o.y0 < e.y1 && e.z0 < o.z1 && o.z0 < e.z1;
+        });
+        if (clash) continue;
+        placed.push_back(e);
+        out.push_back(s);
     }
 
     // Big neon lettering standing on the roof of low buildings ("24時間営業" style).
@@ -471,7 +495,17 @@ std::shared_ptr<const CitySnapshot> build_snapshot(const city::Params& p, std::i
             if (chunk.index_count) mesh.chunks.push_back(chunk);
         }
 
-    for (const SignInstance& s : snap->signs) snap->point_lights.push_back(sign_light(s));
+    for (const SignInstance& s : snap->signs) {
+        const PointLight l = sign_light(s);
+        snap->point_lights.push_back(l);
+        // Big signs and screens light up the smog in front of them.
+        const float power = l.r + l.g + l.b;
+        if (power > 60.0f) {
+            const float radius = std::clamp(std::sqrt(s.width * s.height) * 1.1f + 2.0f, 3.0f, 30.0f);
+            const float k = 0.0015f / (radius * 0.1f + 1.0f);
+            snap->halos.push_back({l.x, l.y, l.z, radius, l.r * k, l.g * k, l.b * k, 0.0f});
+        }
+    }
 
     // Cables between low buildings in the full-detail area: one extra chunk.
     {

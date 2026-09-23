@@ -95,6 +95,25 @@ void main()
         float far_fade = smoothstep(0.3, 0.8, fwidth(g.x));
         s.emissive = mix(tint * lamp * on * 2.5, tint * 0.1, far_fade);
     }
+    if (mat == kMatVending) {
+        // Vending machine front: rows of backlit product dummies, a bright header, the
+        // coin panel dark. u runs across the front, v is height.
+        uint vh = hash_u(seed ^ uint(int(floor(u * 0.5 + 64.0))) ^ 0x7e7du);
+        vec3 body = neon_color(vh) * 0.5 + 0.2;
+        float rows = aa_box(fract(v / 0.32), 0.12, 0.88, fwidth(v / 0.32)) * step(0.7, v) * step(v, 1.6);
+        float cols = aa_box(fract(u / 0.14 + 0.5), 0.15, 0.85, fwidth(u / 0.14));
+        uint ph = hash_u2(uvec2(uint(int(floor(u / 0.14) + 64.0)), uint(int(floor(v / 0.32)))));
+        vec3 product = neon_color(ph) * 0.7 + 0.3;
+        float header = step(1.62, v) * step(v, 1.82);
+        s.albedo = vec3(0.02);
+        s.emissive = (rows * cols * product * 0.9 + header * body * 1.6 + vec3(0.35, 0.4, 0.45) * 0.25) * step(0.3, v);
+        s.specular = 0.4;
+        s.shininess = 200.0;
+    } else if (mat == kMatPlastic) {
+        s.albedo = vec3(0.012, 0.016, 0.014) * 5.0;
+        s.specular = 0.8;
+        s.shininess = 90.0;
+    }
     out_color = vec4(apply_fog(shade_surface(s, p, n, view_dir, ambient), p), 1.0);
     out_material = s.material;
 }

@@ -64,68 +64,109 @@ float sd_capsule(vec2 p, vec2 a, vec2 b, float r)
     return length(pa - ba * h) - r;
 }
 
+// Saturated ad colours (no pastels: they read as washed-out noise at night).
 vec3 ad_palette(uint h)
 {
-    const vec3 p[8] = vec3[8](vec3(1.0, 0.35, 0.55), vec3(0.2, 0.9, 1.0), vec3(1.0, 0.75, 0.3), vec3(0.6, 0.35, 1.0),
-                              vec3(1.0, 0.2, 0.25), vec3(0.3, 1.0, 0.7), vec3(1.0, 0.95, 0.85), vec3(0.95, 0.5, 0.9));
+    const vec3 p[8] = vec3[8](vec3(1.0, 0.08, 0.45), vec3(0.0, 0.85, 1.0), vec3(1.0, 0.82, 0.05), vec3(0.55, 0.1, 1.0),
+                              vec3(1.0, 0.12, 0.1), vec3(0.1, 1.0, 0.45), vec3(1.0, 0.45, 0.05), vec3(0.95, 0.2, 0.95));
     return p[h & 7u];
 }
 
+const uint kJapaneseStrings = 52u;  // signtext::kJapaneseCount (static_assert in renderer.cpp)
+
+// Word laid out in a box of the ad: box = (x0, y0, x1, y1) in uv; square glyph cells
+// sized to fit. Returns the glyph distance (cell units, + inside) or -1 outside.
+float ad_text(uint text, vec2 uv, vec4 box, vec2 size, bool vertical)
+{
+    uint n = max(sign_string_length(text), 1u);
+    vec2 q = (uv - box.xy) / (box.zw - box.xy);
+    if (any(lessThan(q, vec2(0.0))) || any(greaterThan(q, vec2(1.0)))) return -1.0;
+    vec2 box_m = (box.zw - box.xy) * size;  // metres
+    if (!vertical) {
+        float cell = min(box_m.y, box_m.x / float(n));
+        float along = (q.x - 0.5) * box_m.x / (cell * float(n)) + 0.5;
+        float across = (q.y - 0.5) * box_m.y / cell + 0.5;
+        if (along < 0.0 || along > 1.0) return -1.0;
+        return text_distance(text, along, across, false);
+    }
+    float cell = min(box_m.x, box_m.y / float(n));
+    float along = (q.y - 0.5) * box_m.y / (cell * float(n)) + 0.5;
+    float across = (q.x - 0.5) * box_m.x / cell + 0.5;
+    if (along < 0.0 || along > 1.0) return -1.0;
+    return text_distance(text, along, across, true);
+}
+
+// Procedural video advertisements (original, fictional brands). Every creative has one
+// clear subject and big readable text, so a viewer can say what it advertises.
 vec3 screen_ad(vec2 uv, uint seed, uint text, float t, vec2 size)
 {
     // Cycle between creatives every 8 s with a top-down wipe.
     float slot = floor(t / 8.0 + hash_f(seed) * 7.0);
     float phase = fract(t / 8.0 + hash_f(seed) * 7.0);
-    if (phase < 0.05 && uv.y > phase / 0.05) slot -= 1.0;  // new creative wipes in from the top
+    if (phase < 0.05 && uv.y > phase / 0.05) slot -= 1.0;
     uint h = hash_u(seed ^ uint(slot) * 2654435761u);
     uint variant = h % 4u;
     vec3 c1 = ad_palette(h), c2 = ad_palette(h >> 3u), c3 = ad_palette(h >> 6u);
+    if (all(equal(c1, c2))) c2 = ad_palette((h >> 3u) + 3u);
     vec2 p = vec2((uv.x - 0.5) * size.x / size.y, uv.y);  // aspect-correct, y down
+    bool portrait = size.y > size.x;
     vec3 col;
+    vec4 text_box = portrait ? vec4(0.06, 0.74, 0.94, 0.9) : vec4(0.5, 0.3, 0.95, 0.62);
+    vec3 text_col = vec3(1.0);
 
     if (variant == 0u) {
-        // Portrait: gradient backdrop, sun disc, figure silhouette with rim light.
-        col = mix(c1, c2, uv.y) * 0.9;
-        float sun = sd_circle(p - vec2(0.12, 0.32), 0.22);
-        col = mix(col, c3 * 1.2, smoothstep(0.01, -0.01, sun));
-        float head = sd_circle(p - vec2(-0.05, 0.42), 0.09);
-        float body = sd_capsule(p, vec2(-0.05, 0.62), vec2(-0.05, 1.2), 0.2);
+        // Model: bold two-tone backdrop, a head-and-shoulders silhouette with a rim light.
+        col = mix(c1 * 0.25, c1, smoothstep(0.0, 1.0, uv.y + 0.2 * sin(uv.x * 3.0 + t * 0.3)));
+        vec2 fp = portrait ? p - vec2(0.0, 0.0) : p - vec2(-0.25 * size.x / size.y, 0.0);
+        float head = sd_circle(fp - vec2(0.0, 0.33), 0.13);
+        float body = sd_capsule(fp, vec2(0.0, 0.62), vec2(0.0, 1.3), 0.26);
         float fig = min(head, body);
-        col = mix(col, vec3(0.02, 0.02, 0.04), smoothstep(0.01, -0.01, fig));
-        col += c3 * smoothstep(0.02, 0.0, abs(fig)) * 1.5;  // rim
+        col = mix(col, vec3(0.015, 0.01, 0.03), smoothstep(0.008, -0.008, fig));
+        col += c2 * smoothstep(0.02, 0.0, abs(fig)) * 1.6;  // rim
+        // Eyes: a visor stripe in the accent colour.
+        col += c2 * 1.5 * step(abs(fp.y - 0.33), 0.018) * step(abs(fp.x), 0.1);
     } else if (variant == 1u) {
-        // Soft sky with drifting bokeh.
-        col = mix(c1 * 0.6, c2, pow(uv.y, 0.8));
-        for (int i = 0; i < 6; ++i) {
-            vec2 c = vec2(hash_f(h + uint(i)) - 0.5, fract(hash_f(h ^ uint(i * 7)) - t * 0.03 * (1.0 + float(i) * 0.3)));
-            c.x *= size.x / size.y;
-            float r = 0.05 + 0.08 * hash_f(h + uint(i) * 13u);
-            col += c3 * 0.6 * smoothstep(r, r * 0.6, length(p - c));
-        }
+        // Product: a can on a dark stage with a light cone, price roundel.
+        col = mix(vec3(0.01), c1 * 0.35, smoothstep(1.0, 0.2, uv.y));
+        vec2 cp = portrait ? p - vec2(0.0, 0.42) : p - vec2(-0.3 * size.x / size.y, 0.5);
+        vec2 d = abs(cp) - vec2(0.13, 0.28);
+        float can = length(max(d, 0.0)) + min(max(d.x, d.y), 0.0) - 0.03;
+        vec3 can_col = mix(c2, c2 * 0.35, smoothstep(-0.1, 0.12, cp.x)) + vec3(1.0) * smoothstep(0.02, 0.0, abs(cp.x + 0.06)) * 0.8;
+        can_col = mix(can_col, c3, step(abs(cp.y + 0.02), 0.06));  // label band
+        col = mix(col, can_col, smoothstep(0.006, -0.006, can));
+        float roundel = sd_circle(portrait ? p - vec2(0.22 * size.x / size.y, 0.16) : p - vec2(0.05, 0.2), 0.08);
+        col = mix(col, vec3(1.0, 0.85, 0.1), smoothstep(0.006, -0.006, roundel));
+        text_col = c2 * 1.4 + 0.2;
     } else if (variant == 2u) {
-        // Product stripes + big brand text.
-        float stripe = step(0.5, fract((uv.x + uv.y) * 4.0 - t * 0.4));
-        col = mix(c1 * 0.8, c2 * 0.8, stripe);
-        float band = step(0.35, uv.y) * step(uv.y, 0.65);
-        col = mix(col, vec3(0.03), band * 0.85);
-        uint n = max(sign_string_length(text), 1u);
-        float ta = (uv.x - 0.08) / 0.84;
-        float ty = (uv.y - 0.35) / 0.3;
-        float d = -1.0;
-        // Fit the word into the band keeping square cells.
-        float cell_w = 0.84 * size.x / float(n), cell_h = 0.3 * size.y;
-        if (cell_w > cell_h) ta = (uv.x - 0.5) * size.x / (cell_h * float(n)) + 0.5;
-        else ty = (uv.y - 0.5) * size.y / cell_w + 0.5;
-        if (ta > 0.0 && ta < 1.0) d = text_distance(text, ta, ty, false);
-        col = mix(col, c3 * 1.6, smoothstep(-0.01, 0.01, d));
+        // Typographic poster: huge brand name on a colour field, stripes top and bottom.
+        col = c1 * 0.8;
+        float band = step(0.14, uv.y) * step(uv.y, 0.86);
+        col = mix(c2 * 0.9, col, band);
+        col = mix(col, vec3(0.02), step(abs(fract((uv.x - uv.y) * 6.0 - t * 0.3) - 0.5), 0.1) * (1.0 - band));
+        text_box = vec4(0.05, 0.25, 0.95, 0.75);
+        text_col = vec3(0.02);
     } else {
-        // Data wall: scrolling cells.
-        vec2 g = vec2(uv.x * 12.0, uv.y * 12.0 * size.y / size.x - t * 0.8);
-        float on = step(0.55, hash_f2(ucell(g)));
-        vec2 f = fract(g);
-        float cellmask = step(0.12, f.x) * step(0.12, f.y);
-        col = mix(c1 * 0.15, c2, on * cellmask);
+        // Noodle bar: steaming bowl, vertical Japanese name down the side.
+        col = mix(vec3(0.08, 0.01, 0.0), c1 * 0.6, uv.y);
+        vec2 bp = portrait ? p - vec2(0.0, 0.5) : p - vec2(-0.25 * size.x / size.y, 0.55);
+        float bowl = max(length(bp * vec2(1.0, 1.6)) - 0.3, -bp.y);
+        col = mix(col, mix(vec3(0.9, 0.1, 0.05), vec3(1.0, 0.9, 0.7), step(0.04, abs(bp.y - 0.08))), smoothstep(0.006, -0.006, bowl));
+        for (int i = 0; i < 3; ++i) {  // steam
+            float x = float(i - 1) * 0.1 + 0.02 * sin(bp.y * 20.0 - t * 2.0 + float(i));
+            col += vec3(0.6) * smoothstep(0.012, 0.0, abs(bp.x - x)) * step(bp.y, -0.02) * step(-0.35, bp.y) * 0.6;
+        }
+        text = h % kJapaneseStrings;
+        text_box = portrait ? vec4(0.72, 0.05, 0.95, 0.7) : vec4(0.6, 0.08, 0.8, 0.92);
+        float d = ad_text(text, uv, text_box, size, true);
+        col = mix(col, vec3(1.0, 0.95, 0.85), smoothstep(-0.02, 0.02, d));
+        return col;
     }
+    // Brand line, with a dark plate behind it for contrast.
+    float d = ad_text(text, uv, text_box, size, false);
+    float plate = step(text_box.x - 0.02, uv.x) * step(uv.x, text_box.z + 0.02) * step(text_box.y - 0.02, uv.y) *
+                  step(uv.y, text_box.w + 0.02);
+    if (variant != 2u) col = mix(col, col * 0.25, plate * 0.7);
+    col = mix(col, text_col, smoothstep(-0.02, 0.02, d));
     return col;
 }
 
@@ -179,7 +220,7 @@ void main()
         float cellmask = mix(1.0, smoothstep(0.0, 0.15, f.x) * smoothstep(0.0, 0.15, f.y) * 1.3, grid_fade);
         float scan = 0.92 + 0.08 * sin(uv.y * 300.0 - t * 20.0);
         float bezel = step(0.012, min(uv.x, 1.0 - uv.x)) * step(0.008, min(uv.y, 1.0 - uv.y));
-        emissive = img * 2.0 * cellmask * scan * bezel;
+        emissive = img * 1.3 * cellmask * scan * bezel;
     } else if (style == kRooftop) {
         // Animated billboard with a brand line.
         float scanl = 0.5 + 0.5 * sin(uv.y * 40.0 - t * 3.0);
