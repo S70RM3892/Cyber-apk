@@ -1,0 +1,37 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+// Night sky: light-polluted gradient, a low cloud deck lit from below by the city,
+// and a few stars through the gaps.
+#include "include/city_common.glsl"
+
+layout(location = 0) in vec2 in_uv;
+layout(location = 0) out vec4 out_color;
+layout(location = 1) out vec4 out_material;
+
+void main()
+{
+    vec4 clip = vec4(in_uv * 2.0 - 1.0, 1e-4, 1.0);
+    vec4 wp = frame.inv_view_proj * clip;
+    vec3 dir = normalize(wp.xyz / wp.w - frame.camera_pos.xyz);
+    float t = frame.camera_pos.w;
+
+    vec3 c = sky_color(dir);
+
+    if (dir.z > 0.01) {
+        // Cloud deck at 350 m.
+        float dist = (350.0 - frame.camera_pos.z) / dir.z;
+        vec2 cp = frame.camera_pos.xy + dir.xy * dist;
+        float n = fbm(cp * 0.004 + vec2(t * 0.01, t * 0.004));
+        float cover = smoothstep(0.35, 0.75, n);
+        vec3 under_lit = mix(vec3(0.20, 0.05, 0.14), vec3(0.06, 0.10, 0.18), value_noise(cp * 0.0015));
+        float horizon_fade = smoothstep(0.01, 0.25, dir.z);
+        // Stars only where the cloud cover is thin.
+        vec2 sp = dir.xy / (dir.z + 1.0) * 400.0;
+        float star = step(0.9975, hash_f2(ucell(sp))) * (1.0 - cover) * horizon_fade;
+        c += star * vec3(0.8, 0.85, 1.0) * 0.6;
+        c = mix(c, under_lit * (0.35 + 0.65 * n), cover * horizon_fade * 0.9);
+    }
+
+    out_color = vec4(c, 1.0);
+    out_material = vec4(0.0, 1.0, 0.5, 0.5);
+}

@@ -13,6 +13,8 @@
 #include "apex/cluster_cull.hpp"
 #include "apex/normal_codec.hpp"
 #include "apex/specular_aa.hpp"
+#include "apex/game.hpp"
+#include "apex/world.hpp"
 
 namespace {
 
@@ -164,6 +166,67 @@ void test_citygen_roads() {
     }
 }
 
+void test_building_boxes() {
+    // Every building is a contiguous stack: tiers touch, shrink upwards, exactly one roof.
+    city::Params p;
+    p.seed = 99;
+    int towers = 0;
+    for (const auto& b : city::generate_tile(p, 0, 0, 1024.0f)) {
+        std::vector<BuildingInstance> boxes;
+        add_building_boxes(b, boxes);
+        CHECK(!boxes.empty());
+        int tops = 0;
+        for (std::size_t i = 0; i < boxes.size(); ++i) {
+            tops += (boxes[i].flags & BuildingInstance::kTopTier) ? 1 : 0;
+            CHECK(boxes[i].height > boxes[i].base_z);
+            if (i == 0) CHECK(boxes[i].base_z == 0.0f);
+            if (i > 0) {
+                CHECK(boxes[i].base_z == boxes[i - 1].height);
+                CHECK(boxes[i].footprint <= boxes[i - 1].footprint);
+            }
+        }
+        CHECK(tops == 1);
+        CHECK(near(boxes.back().height, b.height));
+        towers += boxes.size() == 3;
+    }
+    CHECK(towers > 0);
+}
+
+void test_signs() {
+    city::Params p;
+    p.seed = 5;
+    for (const auto& b : city::generate_tile(p, 0, 0, 512.0f)) {
+        std::vector<SignInstance> a, c;
+        place_signs(b, a);
+        place_signs(b, c);
+        CHECK(a.size() == c.size());
+        for (std::size_t i = 0; i < a.size(); ++i) {
+            CHECK(a[i].x == c[i].x && a[i].z == c[i].z && a[i].seed == c[i].seed);
+            CHECK(a[i].z - a[i].height * 0.5f >= 2.5f - 1e-4f);  // head clearance for pedestrians
+        }
+    }
+}
+
+void test_collision() {
+    // Walking in a straight line through the city never ends up inside a building.
+    Game game(2077);
+    Input in;
+    in.move_y = 1.0f;
+    in.sprint = true;
+    for (int i = 0; i < 600; ++i) {
+        in.look_dx = (i % 120 == 0) ? 0.9f : 0.0f;  // turn now and then to hit walls at angles
+        game.update(1.0f / 30.0f, in);
+        const Vec3 pos = game.camera().position;
+        for (const BuildingInstance& b : game.world().snapshot()->buildings) {
+            if (b.base_z > pos.z || b.height < pos.z) continue;
+            const float half = b.footprint * 0.5f;
+            const bool inside = std::fabs(pos.x - b.x) < half && std::fabs(pos.y - b.y) < half;
+            CHECK(!inside);
+        }
+    }
+    game.world().wait_ready();
+}
+
 }  // namespace
 
 int main() {
@@ -174,6 +237,9 @@ int main() {
     test_citygen_determinism();
     test_citygen_tiling();
     test_citygen_roads();
+    test_building_boxes();
+    test_signs();
+    test_collision();
     if (g_failures == 0) std::puts("all tests passed");
     return g_failures == 0 ? 0 : 1;
 }

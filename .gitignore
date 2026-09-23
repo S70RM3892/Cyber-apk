@@ -1,2 +1,6 @@
 build/
 .cache/
+.gradle/
+local.properties
+android/.cxx/
+android/build/

@@ -9,13 +9,41 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - name: Install toolchain
-        run: sudo apt-get update && sudo apt-get install -y ninja-build glslang-tools spirv-tools
+      - name: Install toolchain + software Vulkan (lavapipe)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build glslang-tools spirv-tools libvulkan-dev zlib1g-dev \
+            mesa-vulkan-drivers vulkan-validationlayers
       - name: Configure
         run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined"
       - name: Build
         run: cmake --build build
       - name: Unit tests
         run: ctest --test-dir build --output-on-failure
-      - name: Shaders
+      - name: Shaders (standalone validation)
         run: scripts/validate_shaders.sh
+      - name: Render screenshot (validation layer on)
+        run: ./build/apex_host --out city.png --width 1280 --height 720 --frames 3
+      - name: Swapchain path (headless surface, validation layer on)
+        run: ./build/apex_host --present 120 --width 960 --height 540
+      - uses: actions/upload-artifact@v4
+        with:
+          name: screenshot
+          path: city.png
+
+  apk:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - name: Android NDK + CMake
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;29.0.14206865" "cmake;3.31.6" "platforms;android-36" > /dev/null
+      - name: Build APK
+        run: ./gradlew :android:assembleDebug :android:assembleRelease --console=plain
+      - uses: actions/upload-artifact@v4
+        with:
+          name: apk
+          path: android/build/outputs/apk/**/*.apk
