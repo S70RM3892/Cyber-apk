@@ -2,7 +2,8 @@
 //
 // Controls (landscape):
 //   left half   floating virtual stick: walk; push to the rim to sprint
-//   right half  drag to look around; JUMP and CAR (summon / exit) buttons bottom-right
+//   right half  drag to look around; JUMP (tap = hop, hold = charged jump onto roofs)
+//               and CAR (summon / exit) buttons bottom-right
 //   driving     stick y = throttle / brake / reverse, stick x = steer
 //   keyboard    WASD + Shift, arrows to look, Space jump, F car (emulators / Chromebooks)
 #include <aaudio/AAudio.h>
@@ -127,7 +128,8 @@ public:
                 if (down && AKeyEvent_getRepeatCount(e) == 0) car_pending_ = true;
                 return true;
             case AKEYCODE_SPACE:
-                if (down && AKeyEvent_getRepeatCount(e) == 0) jump_pending_ = true;
+                keys_[9] = down;
+                if (down) jump_pending_ = true;
                 return true;
             default: return false;
         }
@@ -144,7 +146,8 @@ public:
         in.look_dx = look_dx_ + (keys_[4] ? key_turn : 0.0f) - (keys_[5] ? key_turn : 0.0f);
         in.look_dy = look_dy_ + (keys_[6] ? key_turn : 0.0f) - (keys_[7] ? key_turn : 0.0f);
         look_dx_ = look_dy_ = 0.0f;
-        in.jump = jump_pending_;
+        // Held = charging; `pending` guarantees a quick tap is seen for at least one frame.
+        in.jump = jump_id_ >= 0 || keys_[9] || jump_pending_;
         jump_pending_ = false;
         in.toggle_car = car_pending_;
         car_pending_ = false;
@@ -164,7 +167,7 @@ private:
     float stick_origin_x_ = 0, stick_origin_y_ = 0, stick_x_ = 0, stick_y_ = 0;
     float look_last_x_ = 0, look_last_y_ = 0, look_dx_ = 0, look_dy_ = 0;
     bool sprint_ = false;
-    std::array<bool, 9> keys_{};
+    std::array<bool, 10> keys_{};
 };
 
 // ---- Audio (AAudio) ---------------------------------------------------------------------

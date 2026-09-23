@@ -234,6 +234,11 @@ void build_hud(HudBuilder& hud, const Game& game, const HudInput& in) {
         const float a = in.jump_held ? 0.55f : 0.25f;
         hud.ring(jb.cx, jb.cy, jb.radius, 0.08f, kPink[0], kPink[1], kPink[2], a + 0.2f);
         if (in.jump_held) hud.ring(jb.cx, jb.cy, jb.radius * 0.9f, 0.0f, kPink[0], kPink[1], kPink[2], 0.25f);
+        // Charge: a growing yellow disc; full = roof-height jump.
+        const float charge = game.jump_charge();
+        if (charge > 0.1f)
+            hud.ring(jb.cx, jb.cy, jb.radius * 0.85f * charge, 0.0f, kYellow[0], kYellow[1], kYellow[2],
+                     charge >= 1.0f ? 0.7f : 0.4f);
         hud.text("JUMP", jb.cx - HudBuilder::text_width("JUMP", px * 0.9f) * 0.5f, jb.cy - 3.5f * px * 0.9f,
                  px * 0.9f, 1.0f, 1.0f, 1.0f, 0.7f);
     }

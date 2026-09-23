@@ -2,6 +2,8 @@
 // gigs, clock.
 #pragma once
 
+#include <algorithm>
+
 #include "apex/mat.hpp"
 #include "apex/world.hpp"
 
@@ -12,7 +14,7 @@ struct Input {
     float move_x = 0, move_y = 0;    // stick, [-1, 1]; +y = forward/throttle, +x = right/steer
     float look_dx = 0, look_dy = 0;  // radians this frame
     bool sprint = false;
-    bool jump = false;        // edge-triggered: true for the frame the button was pressed
+    bool jump = false;        // jump button is held (charge while held, jump on release)
     bool toggle_car = false;  // edge-triggered: summon + enter, or exit
 };
 
@@ -71,14 +73,17 @@ public:
     float since_payout() const { return time_ - last_payout_time_; }
     std::uint32_t last_payout() const { return last_payout_; }
     bool on_ground() const { return on_ground_; }
+    // 0..1 while the jump button is held on the ground (for the HUD).
+    float jump_charge() const { return std::min(1.0f, jump_charge_ / kChargeTime); }
+    float feet_height() const { return foot_position_.z; }
     PlayerMode mode() const { return mode_; }
     const Car& car() const { return car_; }
     // The player's ground position (feet), whichever mode they're in.
     Vec3 player_position() const;
     // Move the player on foot (tests / debug teleports).
     void set_foot_position(Vec3 p) {
-        foot_position_ = {p.x, p.y, 0.0f};
-        camera_.position = {p.x, p.y, kEyeHeight + height_};
+        foot_position_ = {p.x, p.y, std::max(p.z, 0.0f)};
+        camera_.position = {p.x, p.y, foot_position_.z + kEyeHeight};
     }
     // Horizontal speed of the player (on foot or in the car), m/s.
     float player_speed() const { return player_speed_; }
@@ -94,7 +99,9 @@ public:
     static constexpr float kWalkSpeed = 4.5f;
     static constexpr float kSprintSpeed = 11.0f;
     static constexpr float kRadius = 0.35f;
-    static constexpr float kJumpSpeed = 6.0f;
+    static constexpr float kJumpSpeed = 6.0f;         // tap
+    static constexpr float kChargedJumpSpeed = 19.0f; // full charge: ~11 m, enough for low roofs
+    static constexpr float kChargeTime = 0.9f;
     static constexpr float kGravity = 16.0f;  // snappier than 9.81 for a game feel
     static constexpr float kGigRadius = 5.0f;
     static constexpr float kGigRadiusDriving = 9.0f;
@@ -108,8 +115,10 @@ private:
     Gig gig_;
     std::uint32_t credits_ = 0, completed_ = 0, last_payout_ = 0;
     float last_payout_time_ = -1000.0f;
-    float height_ = 0.0f, vz_ = 0.0f;  // feet above the ground, vertical velocity
+    float vz_ = 0.0f;                  // vertical velocity (feet altitude lives in foot_position_.z)
     bool on_ground_ = true;
+    bool jump_was_held_ = false;
+    float jump_charge_ = 0.0f;
     PlayerMode mode_ = PlayerMode::OnFoot;
     Car car_;
     Vec3 foot_position_;           // feet position while on foot

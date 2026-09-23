@@ -62,7 +62,12 @@ void main()
     c.g = texture(hdr, uv).g;
     c.b = texture(hdr, uv + ca).b;
 
-    c += texture(bloom, uv).rgb * params.bloom_strength;
+    // Energy-conserving bloom: the up-sampled chain sums 6 levels, so normalise it and
+    // blend towards it rather than adding. Big bright areas (a neon sign right next to
+    // the camera) then keep their brightness instead of blowing out, while small sources
+    // still spread a halo. bloom_strength is the blend weight scaled by 1/4.
+    vec3 glow = texture(bloom, uv).rgb * (1.0 / 6.0);
+    c = mix(c, glow, clamp(params.bloom_strength * 0.25, 0.0, 0.9));
     c *= params.exposure;
 
     // Grade: teal shadows, warm highlights, a little extra saturation.

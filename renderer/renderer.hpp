@@ -24,8 +24,8 @@ struct RenderSettings {
     float min_scale = 0.5f, max_scale = 0.75f;
     float gpu_budget_ms = 13.0f;  // leaves headroom inside a 16.6 ms vsync interval
     int ssr_steps = 24;
-    float exposure = 1.5f;
-    float bloom_strength = 1.5f;
+    float exposure = 1.8f;
+    float bloom_strength = 1.7f;
     float rain = 1.0f;
     float fog_density = 0.0045f;
     std::uint32_t traffic_count = 780;     // 320 fly, 260 side streets, 200 expressways (traffic.vert)

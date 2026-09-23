@@ -410,7 +410,7 @@ Vec3 World::move_with_collision(Vec3 from, Vec3 to, float radius) const {
         for (const BuildingInstance& b : current_->buildings) {
             const float half = b.footprint * 0.5f;
             if (std::fabs(p.x - b.x) > half + radius || std::fabs(p.y - b.y) > half + radius) continue;
-            if (p.z > b.height || p.z < b.base_z) continue;  // above / below this box
+            if (p.z >= b.height - 0.05f || p.z + 1.8f < b.base_z) continue;  // standing on it / passing under
             const float cx = std::clamp(p.x, b.x - half, b.x + half);
             const float cy = std::clamp(p.y, b.y - half, b.y + half);
             float dx = p.x - cx, dy = p.y - cy;
@@ -433,6 +433,17 @@ Vec3 World::move_with_collision(Vec3 from, Vec3 to, float radius) const {
         }
     }
     return p;
+}
+
+float World::ground_height(float x, float y, float feet, float step_up) const {
+    float ground = 0.0f;
+    if (!current_) return ground;
+    for (const BuildingInstance& b : current_->buildings) {
+        const float half = b.footprint * 0.5f;
+        if (std::fabs(x - b.x) > half || std::fabs(y - b.y) > half) continue;
+        if (b.height <= feet + step_up) ground = std::max(ground, b.height);
+    }
+    return ground;
 }
 
 Vec3 World::find_spawn(Vec3 near) const {

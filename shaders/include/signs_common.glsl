@@ -22,7 +22,9 @@ vec3 neon_glyph(float d, float aa, vec3 col, float intensity, out float coverage
 {
     float fill = smoothstep(-aa, aa, d);
     float core = fill * (0.75 + 0.25 * smoothstep(0.0, 0.04, d));
-    float halo = exp(-max(-d, 0.0) * 40.0) * (1.0 - fill);
+    // The SDF saturates 0.125 cells outside the outline: subtract the halo's value there so
+    // it reaches exactly zero before the cell edge (otherwise cells show as faint boxes).
+    float halo = max(exp(-max(-d, 0.0) * 40.0) - exp(-0.12 * 40.0), 0.0) * (1.0 - fill);
     coverage = max(fill, halo);
     vec3 hot = mix(col, vec3(1.0), 0.15);
     return (hot * core + col * halo * 0.35) * intensity;

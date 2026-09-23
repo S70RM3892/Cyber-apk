@@ -85,6 +85,7 @@ struct Args {
     int peds = -1;
     std::string audio_out;
     float eye = 0;  // debug: override camera height (elevated reference views)
+    bool on_roof = false;  // start on the nearest shack roof, as a player would after a charged jump
 };
 
 Args parse(int argc, char** argv) {
@@ -113,6 +114,7 @@ Args parse(int argc, char** argv) {
         else if (k == "--peds") a.peds = std::stoi(next());
         else if (k == "--audio") a.audio_out = next();
         else if (k == "--eye") a.eye = std::stof(next());
+        else if (k == "--on-roof") a.on_roof = true;
         else std::fprintf(stderr, "unknown argument %s\n", k.c_str());
     }
     return a;
@@ -216,6 +218,19 @@ int main(int argc, char** argv) {
     game.camera().yaw = args.yaw;
     game.camera().pitch = args.pitch;
     if (args.has_pos) game.set_foot_position({args.x, args.y, 0.0f});
+    if (args.on_roof) {
+        game.world().update(game.player_position());
+        game.world().wait_ready();
+        const Vec3 p = game.player_position();
+        const BuildingInstance* best = nullptr;
+        float best_d = 1e9f;
+        for (const auto& b : game.world().snapshot()->buildings) {
+            if (!(b.flags & BuildingInstance::kShanty) || b.height < 7.0f) continue;
+            const float d = std::hypot(b.x - p.x, b.y - p.y);
+            if (d < best_d) best_d = d, best = &b;
+        }
+        if (best) game.set_foot_position({best->x, best->y, best->height});
+    }
     if (args.face_gig) {
         const Vec3 d = game.gig().target - game.camera().position;
         game.camera().yaw = std::atan2(d.y, d.x);

@@ -120,7 +120,12 @@ public:
     const city::Params& params() const { return params_; }
 
     // Slide a circle of `radius` from `from` towards `to` against building footprints.
+    // z is the feet altitude: boxes whose top is at or below the feet don't block.
     Vec3 move_with_collision(Vec3 from, Vec3 to, float radius) const;
+
+    // Highest walkable surface (street = 0, or a roof) under (x, y) that is no more than
+    // `step_up` above `feet`.
+    float ground_height(float x, float y, float feet, float step_up = 0.45f) const;
 
     // A point on an arterial road near `near`, used as a spawn position.
     Vec3 find_spawn(Vec3 near) const;

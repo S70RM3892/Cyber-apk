@@ -164,9 +164,13 @@ void main()
             // desks/partitions below, fixture rows every 3 m.
             float ceiling = mix(0.25, 1.0, smoothstep(0.45, 0.95, f.y));
             float fixtures = mix(0.6, 1.0, aa_box(fract(u / 3.0), 0.2, 0.8, fwidth(u / 3.0)));
-            vec3 near_w = glass * floor_lit * bay_lit * office * ceiling * fixtures * 0.3;
-            // Far away the office grid becomes a field of pale dots: keep its average up.
-            windows = mix(near_w, office * 0.25 * 0.75 * 0.82 * 0.5 * 0.55, far_blend);
+            // Filter each axis separately: across a floor the bays average out first, but
+            // lit / dark floors survive as horizontal stripes at distance, which is what
+            // makes a far tower read as an office block at night.
+            float bx = smoothstep(0.35, 0.8, fw.x), by = smoothstep(0.35, 0.8, fw.y);
+            float bay_term = mix(mullion * bay_lit * fixtures, 0.96 * 0.75 * 0.8, bx);
+            float floor_term = mix(slab * floor_lit * ceiling, 0.82 * 0.25 * 0.6, by);
+            windows = office * bay_term * floor_term * 0.3 * 1.6;
         } else {
             float wx0 = style == 2u ? 0.2 : 0.22, wy0 = style == 2u ? 0.3 : 0.32;
             glass = aa_box(f.x, wx0, 1.0 - wx0, fw.x) * aa_box(f.y, wy0, 0.80, fw.y);
@@ -183,7 +187,7 @@ void main()
             float blind = mix(0.3, 1.0, smoothstep(0.84, 0.4, f.y));
             vec3 wl = window_light(cell_hash) * (0.15 + 0.4 * hash_f(cell_hash ^ 0x77u)) * blind * flicker;
             float coverage = (1.0 - 2.0 * wx0) * (0.80 - wy0);
-            windows = mix(glass * lit * wl, vec3(0.75, 0.62, 0.5) * occupancy * coverage * 0.5, far_blend);
+            windows = mix(glass * lit * wl, vec3(0.75, 0.66, 0.58) * occupancy * coverage * 0.8, far_blend);
         }
 
         // Street level (ground tier only): shopfront band with bright interiors.

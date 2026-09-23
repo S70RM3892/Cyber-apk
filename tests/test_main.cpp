@@ -308,6 +308,50 @@ void test_jump() {
     CHECK(near(game.camera().position.z, Game::kEyeHeight));
 }
 
+void test_rooftops() {
+    Game game(2077);
+    // Find a shack roof in the streamed snapshot.
+    const BuildingInstance* roof = nullptr;
+    for (const auto& b : game.world().snapshot()->buildings)
+        if ((b.flags & BuildingInstance::kShanty) && b.height > 6.0f && b.footprint > 6.0f) {
+            roof = &b;
+            break;
+        }
+    CHECK(roof != nullptr);
+    if (!roof) return;
+    const BuildingInstance r = *roof;
+
+    // Standing on the roof: stays up there.
+    game.set_foot_position({r.x, r.y, r.height});
+    Input idle;
+    for (int i = 0; i < 30; ++i) game.update(1.0f / 30.0f, idle);
+    CHECK(near(game.feet_height(), r.height, 1e-3f));
+    CHECK(game.on_ground());
+
+    // Walk off the edge: falls back to the street (or a lower roof).
+    Input walk;
+    walk.move_y = 1.0f;
+    game.camera().yaw = 0.0f;  // +x
+    for (int i = 0; i < 90; ++i) game.update(1.0f / 30.0f, walk);
+    CHECK(game.feet_height() < r.height - 1.0f);
+
+    // A full charge clears a two-storey roof; a tap does not.
+    game.set_foot_position({game.player_position().x, game.player_position().y, 0.0f});
+    game.update(1.0f / 60.0f, idle);
+    Input hold;
+    hold.jump = true;
+    for (int i = 0; i < 60; ++i) game.update(1.0f / 60.0f, hold);
+    CHECK(game.jump_charge() >= 1.0f);
+    const float start = game.feet_height();
+    float peak = start;
+    for (int i = 0; i < 180; ++i) {
+        game.update(1.0f / 60.0f, idle);
+        peak = std::max(peak, game.feet_height());
+    }
+    CHECK(peak - start > 9.0f && peak - start < 13.0f);  // v^2/2g = 361/32 = 11.3 m
+    game.world().wait_ready();
+}
+
 void test_driving() {
     Game game(2077);
     Input in;
@@ -415,6 +459,7 @@ int main() {
     test_gigs();
     test_jump();
     test_driving();
+    test_rooftops();
     test_audio();
     if (g_failures == 0) std::puts("all tests passed");
     return g_failures == 0 ? 0 : 1;

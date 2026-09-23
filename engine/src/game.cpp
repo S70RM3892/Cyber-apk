@@ -74,9 +74,10 @@ void Game::toggle_car() {
     }
     car_.speed = 0.0f;
     chase_yaw_offset_ = 0.0f;
-    height_ = 0.0f;
     vz_ = 0.0f;
     on_ground_ = true;
+    jump_charge_ = 0.0f;
+    foot_position_.z = 0.0f;
     mode_ = PlayerMode::Driving;
 }
 
@@ -84,20 +85,15 @@ void Game::update_on_foot(float dt, const Input& in) {
     camera_.yaw += in.look_dx;
     camera_.pitch = std::clamp(camera_.pitch + in.look_dy, -1.45f, 1.45f);
 
-    // Vertical: jump + gravity, feet clamp at street level.
-    if (in.jump && on_ground_) {
-        vz_ = kJumpSpeed;
+    // Jump: hold to charge (reinforced-tendon style), release to jump; a tap is a hop.
+    if (in.jump && on_ground_) jump_charge_ += dt;
+    if (!in.jump && jump_was_held_ && on_ground_) {
+        const float c = std::min(1.0f, std::max(0.0f, jump_charge_ - 0.12f) / (kChargeTime - 0.12f));
+        vz_ = kJumpSpeed + (kChargedJumpSpeed - kJumpSpeed) * c * c;
         on_ground_ = false;
     }
-    if (!on_ground_) {
-        vz_ -= kGravity * dt;
-        height_ += vz_ * dt;
-        if (height_ <= 0.0f) {
-            height_ = 0.0f;
-            vz_ = 0.0f;
-            on_ground_ = true;
-        }
-    }
+    if (!in.jump) jump_charge_ = 0.0f;
+    jump_was_held_ = in.jump;
 
     const float speed = in.sprint ? kSprintSpeed : kWalkSpeed;
     const float fx = std::cos(camera_.yaw), fy = std::sin(camera_.yaw);
@@ -109,7 +105,23 @@ void Game::update_on_foot(float dt, const Input& in) {
     foot_position_ = world_.move_with_collision(foot_position_, target, kRadius);
     const float mdx = foot_position_.x - before.x, mdy = foot_position_.y - before.y;
     player_speed_ = std::sqrt(mdx * mdx + mdy * mdy) / std::max(dt, 1e-4f);
-    camera_.position = {foot_position_.x, foot_position_.y, kEyeHeight + height_};
+
+    // Vertical: gravity, land on the street or any roof below; walking off an edge falls.
+    const float ground = world_.ground_height(foot_position_.x, foot_position_.y, foot_position_.z);
+    if (!on_ground_ || foot_position_.z > ground + 0.01f) {
+        on_ground_ = false;
+        vz_ -= kGravity * dt;
+        foot_position_.z += vz_ * dt;
+        const float below = world_.ground_height(foot_position_.x, foot_position_.y, foot_position_.z - vz_ * dt);
+        if (foot_position_.z <= below && vz_ <= 0.0f) {
+            foot_position_.z = below;
+            vz_ = 0.0f;
+            on_ground_ = true;
+        }
+    } else {
+        foot_position_.z = ground;  // step up small ledges
+    }
+    camera_.position = {foot_position_.x, foot_position_.y, foot_position_.z + kEyeHeight};
 }
 
 void Game::update_driving(float dt, const Input& in) {
