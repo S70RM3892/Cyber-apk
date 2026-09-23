@@ -77,6 +77,7 @@ private:
     VkExtent2D output_extent_{};
     VkExtent2D internal_{};
     VkFormat bloom_format_ = VK_FORMAT_R16G16B16A16_SFLOAT;
+    VkFormat depth_format_ = VK_FORMAT_D32_SFLOAT;
 
     // Samplers
     VkSampler linear_clamp_ = VK_NULL_HANDLE;

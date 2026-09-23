@@ -27,7 +27,6 @@ static_assert(sizeof(FrameUniforms) == 352);
 
 constexpr VkFormat kSceneColorFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
 constexpr VkFormat kMaterialFormat = VK_FORMAT_R8G8B8A8_UNORM;
-constexpr VkFormat kDepthFormat = VK_FORMAT_D32_SFLOAT;
 constexpr std::uint32_t kPlayerCarInstance = 1u << 20;  // traffic.vert kPlayerCar
 
 // Inverse of an invertible 4x4 (cofactor expansion). Only used once per frame.
@@ -194,6 +193,14 @@ Renderer::Renderer(vk::Context& ctx, VkFormat output_format, VkExtent2D output_e
                              VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT |
                                  VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BLEND_BIT))
         bloom_format_ = VK_FORMAT_B10G11R11_UFLOAT_PACK32;
+    // Depth must be sampled by the SSR pass. D32_SFLOAT is near-universal on mobile but
+    // not guaranteed; X8_D24 or D16 are the spec's fallbacks.
+    for (VkFormat f : {VK_FORMAT_D32_SFLOAT, VK_FORMAT_X8_D24_UNORM_PACK32, VK_FORMAT_D16_UNORM}) {
+        if (ctx_.supports_format(f, VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT)) {
+            depth_format_ = f;
+            break;
+        }
+    }
     create_static();
     create_pipelines();
     create_sized();
@@ -423,7 +430,7 @@ void Renderer::create_pipelines() {
     PipelineDesc d;
     d.layout = scene_layout_;
     d.color_formats = scene_formats;
-    d.depth_format = kDepthFormat;
+    d.depth_format = depth_format_;
     d.depth_test = true;
     d.depth_write = true;
     d.depth_op = VK_COMPARE_OP_GREATER;
@@ -498,7 +505,7 @@ void Renderer::create_sized() {
     const VkImageUsageFlags rt = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
     scene_color_ = vk::create_image(ctx_, internal_, kSceneColorFormat, rt);
     scene_material_ = vk::create_image(ctx_, internal_, kMaterialFormat, rt);
-    depth_ = vk::create_image(ctx_, internal_, kDepthFormat,
+    depth_ = vk::create_image(ctx_, internal_, depth_format_,
                               VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
     resolved_ = vk::create_image(ctx_, internal_, kSceneColorFormat, rt);
     VkExtent2D e = internal_;

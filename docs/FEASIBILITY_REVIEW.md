@@ -103,15 +103,21 @@
 
 ## 3. このリポジトリで実装済みの範囲
 
+修正版バジェットに沿って、以下が動くAPKになっている（詳細は [README](../README.md)）。
+
 | 仕様 | 実装 | 検証 |
 |---|---|---|
 | §3.3 法線 2ch 符号化 | `engine/include/apex/normal_codec.hpp`, `shaders/include/normal_codec.glsl` | ユニットテスト |
-| §3.4 法線分散→ラフネス焼き込み | `engine/src/specular_aa.cpp` | ユニットテスト（平坦面で不変、分散で単調増加、非2冪で例外） |
-| §3.2 トライプラナー・マイクロディテール | `shaders/include/triplanar_microdetail.glsl`, `shaders/gbuffer.frag` | SPIR-V コンパイル |
-| §4.1 クラスタカリング | `shaders/cluster_cull.comp`（GPU）, `engine/src/cluster_cull.cpp`（CPU参照） | ユニットテスト＋SPIR-V コンパイル |
-| §5 プロシージャル都市 | `engine/src/citygen.cpp` | ユニットテスト（決定性、タイル境界で重複・欠落なし、道路非干渉） |
+| §3.4 法線分散→ラフネス焼き込み | `engine/src/specular_aa.cpp` | ユニットテスト |
+| §3.2 トライプラナー・マイクロディテール | `shaders/include/triplanar_microdetail.glsl`, `shaders/gbuffer.frag` | SPIR-V コンパイル（テクスチャ資産がないため本体の描画には未接続） |
+| §4.1 クラスタカリング | `shaders/cluster_cull.comp`, `engine/src/cluster_cull.cpp` | ユニットテスト＋SPIR-V（本体は現状インスタンス描画で足りており未接続） |
+| §4.3 動的解像度 | `renderer/renderer.cpp`（GPUタイムスタンプで0.5〜0.75倍を制御） | lavapipe上で縮小動作を確認 |
+| §5 手続き都市・ストリーミング | `engine/src/citygen.cpp`, `engine/src/world.cpp` | ユニットテスト（決定性、タイル境界、道路非干渉、段状マッシング） |
+| 描画（濡れた路面SSR、ブルーム、ACES、雨、霧、ネオン） | `renderer/`, `shaders/` | lavapipe＋検証レイヤーでエラーなし、スクリーンショット |
+| ゲーム（歩行・ジャンプ・運転・ギグ）、HUD、手続き音声 | `engine/src/game.cpp`, `hud.cpp`, `audio.cpp` | ユニットテスト |
+| Android実行系（スワップチェーンのpre-rotation、タッチ、AAudio） | `android/`, `renderer/presenter.cpp` | present経路をheadless surfaceで検証。**実機は未検証** |
 
-未実装（次ステップ）: Android/Vulkan ランタイム本体、アセットパイプライン CLI（astcenc 連携）、HZB 生成パス、GI、SR/FG の SDK 統合、Rust I/O ランタイム。
+未実装: ニューラル超解像・フレーム生成（ベンダーSDK統合）、GI、レイトレース反射、アセットパイプラインCLI（astcenc連携）、Rust I/O ランタイム、ADPF による熱制御。
 
 ---
 

@@ -22,9 +22,17 @@ jobs:
         run: ctest --test-dir build --output-on-failure
       - name: Shaders (standalone validation)
         run: scripts/validate_shaders.sh
+      # Leak checking is off for the two Vulkan runs only: lavapipe's LLVM worker
+      # threads keep thread-local allocations alive at exit (the stacks contain no
+      # frames from this project). ASan still catches memory errors here, and the
+      # unit tests above run with full leak checking.
       - name: Render screenshot (validation layer on)
+        env:
+          ASAN_OPTIONS: detect_leaks=0
         run: ./build/apex_host --out city.png --width 1280 --height 720 --frames 3
       - name: Swapchain path (headless surface, validation layer on)
+        env:
+          ASAN_OPTIONS: detect_leaks=0
         run: ./build/apex_host --present 120 --width 960 --height 540
       - uses: actions/upload-artifact@v4
         with:

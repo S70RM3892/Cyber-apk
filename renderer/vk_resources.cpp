@@ -34,8 +34,8 @@ void destroy(const Context& ctx, Buffer& b) {
 }
 
 bool is_depth_format(VkFormat f) {
-    return f == VK_FORMAT_D32_SFLOAT || f == VK_FORMAT_D16_UNORM || f == VK_FORMAT_D24_UNORM_S8_UINT ||
-           f == VK_FORMAT_D32_SFLOAT_S8_UINT;
+    return f == VK_FORMAT_D32_SFLOAT || f == VK_FORMAT_D16_UNORM || f == VK_FORMAT_X8_D24_UNORM_PACK32 ||
+           f == VK_FORMAT_D24_UNORM_S8_UINT || f == VK_FORMAT_D32_SFLOAT_S8_UINT;
 }
 
 Image create_image(const Context& ctx, VkExtent2D extent, VkFormat format, VkImageUsageFlags usage,
