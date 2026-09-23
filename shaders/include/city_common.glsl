@@ -12,6 +12,7 @@ struct Building {
 };
 const uint kTopTier = 1u;
 const uint kShanty = 2u;
+const uint kMeshed = 4u;
 
 struct Sign {
     vec4 pos_yaw;       // x, y, z, yaw
@@ -144,7 +145,7 @@ vec3 apply_fog(vec3 color, vec3 world_pos)
     // with a little neon warmth right at street level.
     vec3 dir = normalize(d);
     vec3 smog = mix(vec3(0.036, 0.042, 0.046), vec3(0.012, 0.020, 0.025), clamp(dir.z * 2.0, 0.0, 1.0));
-    vec3 in_scatter = smog * 2.4 + vec3(0.04, 0.007, 0.008) * exp(-max(world_pos.z, 0.0) / 15.0);
+    vec3 in_scatter = smog * 1.5 + vec3(0.04, 0.007, 0.008) * exp(-max(world_pos.z, 0.0) / 15.0);
     return mix(color, in_scatter, amount);
 }
 

@@ -31,4 +31,6 @@ void main()
     out_normal = kFaceNormal[face];
     out_instance = uint(gl_InstanceIndex);
     gl_Position = frame.view_proj * vec4(world, 1.0);
+    // Buildings with a detailed mesh (detail.vert) keep their box for collision only.
+    if ((b.seed_district_flags_base.z & kMeshed) != 0u) gl_Position = vec4(0.0, 0.0, -1.0, 1.0);
 }

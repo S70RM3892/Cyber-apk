@@ -1,5 +1,7 @@
 #include "apex/world.hpp"
 
+#include "apex/buildgen.hpp"
+#include "apex/massing.hpp"
 #include "apex/sign_text_data.hpp"
 
 #include <algorithm>
@@ -10,6 +12,8 @@
 namespace apex {
 
 namespace {
+Rgb mix(Rgb a, Rgb b, float t) { return {a.r + (b.r - a.r) * t, a.g + (b.g - a.g) * t, a.b + (b.b - a.b) * t}; }
+}  // namespace
 
 float unit(std::uint64_t h) { return static_cast<float>(h >> 40) * (1.0f / 16777216.0f); }
 
@@ -19,22 +23,9 @@ std::uint64_t building_hash(const city::Building& b) {
     return city::hash64(city::hash64(bx) ^ (by * 0x9E3779B97F4A7C15ull));
 }
 
-std::int32_t tile_of(float v, float tile) { return static_cast<std::int32_t>(std::floor(v / tile)); }
-
-}  // namespace
-
 namespace {
-
-// Massing parameters shared by the box stack and the sign placement, so signs sit on
-// actual walls.
-struct Massing {
-    bool tower = false;     // podium + shaft + crown
-    bool stepped = false;   // residential: lower block + narrower upper block
-    float base_top = 0;     // top of the full-footprint box (podium / lower block / whole building)
-    float shaft = 0;        // tower shaft footprint (m)
-    float shaft_top = 0;    // tower shaft top (m)
-    float top_footprint = 0;  // footprint of the box carrying the roof
-};
+std::int32_t tile_of(float v, float tile) { return static_cast<std::int32_t>(std::floor(v / tile)); }
+}  // namespace
 
 Massing massing_of(const city::Building& b) {
     Massing m;
@@ -49,6 +40,9 @@ Massing massing_of(const city::Building& b) {
         m.shaft = b.footprint * (0.62f + 0.12f * r);
         m.shaft_top = b.height * (0.78f + 0.12f * r);
         m.top_footprint = b.footprint * (0.40f + 0.10f * r);
+        // Shaft plan: square, chamfered or octagonal.
+        const float rc = unit(city::hash64(building_hash(b) ^ 0xc07));
+        m.shaft_cut = rc < 0.35f ? 0.0f : rc < 0.75f ? 0.15f + 0.3f * (rc - 0.35f) : 0.586f;
     } else if (b.district == city::District::Residential && b.height > 30.0f) {
         m.stepped = true;
         m.base_top = b.height * (0.55f + 0.2f * r);
@@ -57,7 +51,17 @@ Massing massing_of(const city::Building& b) {
     return m;
 }
 
-}  // namespace
+float shanty_roof_z(const city::Building& b, float x, float y) {
+    // Mono-pitch: ~6 degrees down towards one of the four sides.
+    const auto dir = static_cast<int>(city::hash64(building_hash(b) ^ 0x51a7) & 3u);
+    const float d = dir == 0 ? x - b.x : dir == 1 ? b.x - x : dir == 2 ? y - b.y : b.y - y;
+    return b.height - 0.1f * d;
+}
+
+bool has_sawtooth_roof(const city::Building& b) {
+    return b.district == city::District::Industrial && !b.shanty && b.height < 22.0f && b.footprint > 18.0f &&
+           unit(city::hash64(building_hash(b) ^ 0x5a37)) < 0.6f;
+}
 
 void add_building_boxes(const city::Building& b, std::vector<BuildingInstance>& out) {
     const std::uint64_t h = building_hash(b);
@@ -187,8 +191,9 @@ void place_signs(const city::Building& b, std::vector<SignInstance>& out) {
         s.seed = static_cast<std::uint32_t>(city::hash64(h ^ 0xba7) >> 32);
         s.width = 2.5f + next() * 2.0f;
         s.height = s.width * (n * 0.92f + 0.35f);
-        const float out_dist = mass.shaft * 0.5f + s.width * 0.5f + 0.3f;
-        const float corner = (next() < 0.5f ? -1.0f : 1.0f) * (mass.shaft * 0.5f - 1.0f);
+        // Clear of the shaft's floor ledges (0.35 m), at the end of a flat face.
+        const float out_dist = mass.shaft * 0.5f + s.width * 0.5f + 0.5f;
+        const float corner = (next() < 0.5f ? -1.0f : 1.0f) * (mass.shaft_flat() * 0.5f - 1.0f);
         s.x = b.x + nx * out_dist + tx * corner;
         s.y = b.y + ny * out_dist + ty * corner;
         s.z = mass.base_top + 4.0f + s.height * 0.5f + next() * 25.0f;
@@ -206,7 +211,8 @@ void place_signs(const city::Building& b, std::vector<SignInstance>& out) {
             s.style = pack(SignStyle::Screen, signtext::kJapaneseCount + static_cast<std::uint32_t>(next() * static_cast<float>(signtext::kLatinCount - 1)));
             s.seed = static_cast<std::uint32_t>(city::hash64(h ^ (0x5c + static_cast<std::uint64_t>(k))) >> 32);
             // Screens hang on the shaft tier's wall, above the podium.
-            const float max_w = mass.shaft * 0.85f;
+            const float flat = mass.shaft_flat();
+            const float max_w = flat * 0.85f;
             if (next() < 0.6f) {  // portrait
                 s.width = std::min(max_w, 7.0f + next() * 6.0f);
                 s.height = s.width * (2.2f + next() * 1.2f);
@@ -214,9 +220,9 @@ void place_signs(const city::Building& b, std::vector<SignInstance>& out) {
                 s.width = std::min(max_w, 14.0f + next() * 12.0f);
                 s.height = s.width * 0.56f;
             }
-            const float face_offset = mass.shaft * 0.5f + 0.25f;
-            s.x = b.x + nx * face_offset + (-ny) * (next() - 0.5f) * (mass.shaft - s.width) * 0.8f;
-            s.y = b.y + ny * face_offset + nx * (next() - 0.5f) * (mass.shaft - s.width) * 0.8f;
+            const float face_offset = mass.shaft * 0.5f + 0.6f;  // in front of ledges and fins
+            s.x = b.x + nx * face_offset + (-ny) * (next() - 0.5f) * (flat - s.width) * 0.8f;
+            s.y = b.y + ny * face_offset + nx * (next() - 0.5f) * (flat - s.width) * 0.8f;
             s.z = mass.base_top + 2.0f + s.height * 0.5f + next() * 30.0f;
             s.yaw = yaw;
             if (s.z + s.height * 0.5f < mass.shaft_top - 2.0f) out.push_back(s);
@@ -260,14 +266,18 @@ void place_props(const city::Building& b, std::vector<PropInstance>& props, std:
     const float quarter = std::numbers::pi_v<float> * 0.5f;
 
     // AC units: shacks get one or two, bigger roofs a small farm.
-    const int ac = b.shanty ? static_cast<int>(next() * 2.5f) : 2 + static_cast<int>(next() * 4.0f);
+    // Sawtooth warehouse roofs carry nothing (the teeth would swallow it).
+    const bool saw = has_sawtooth_roof(b);
+    const int ac = saw ? 0 : b.shanty ? static_cast<int>(next() * 2.5f) : 2 + static_cast<int>(next() * 4.0f);
     for (int i = 0; i < ac && roof > 4.0f; ++i) {
         const auto [x, y] = spot(1.5f);
-        props.push_back({x, y, top, static_cast<float>(static_cast<int>(next() * 4.0f)) * quarter,
+        // Shack roofs slope: sit on the low side of the unit's footprint.
+        const float z = b.shanty ? shanty_roof_z(b, x, y) - 0.1f : top;
+        props.push_back({x, y, z, static_cast<float>(static_cast<int>(next() * 4.0f)) * quarter,
                          0.6f + next() * 0.5f, 0.45f + next() * 0.3f, 0.9f + next() * 0.6f, seed(PropKind::AcUnit)});
     }
     // Water tank on mid-rise roofs.
-    if (!b.shanty && roof > 10.0f && next() < 0.6f) {
+    if (!b.shanty && !saw && roof > 10.0f && next() < 0.6f) {
         const auto [x, y] = spot(3.0f);
         const float r = 1.2f + next() * 1.2f;
         props.push_back({x, y, top, 0.0f, r, r, 2.5f + next() * 2.5f, seed(PropKind::WaterTank)});
@@ -284,7 +294,7 @@ void place_props(const city::Building& b, std::vector<PropInstance>& props, std:
     }
     // Lattice frames (billboard supports / cooling towers) on some mid-rise roofs, lined
     // with small red warning lights like the steel structures of the target look.
-    if (!b.shanty && !m.tower && roof > 14.0f && next() < 0.35f) {
+    if (!b.shanty && !saw && !m.tower && roof > 14.0f && next() < 0.35f) {
         const auto [x, y] = spot(5.0f);
         const float w = 3.0f + next() * 4.0f, hgt = 4.0f + next() * 6.0f;
         const float yaw = static_cast<float>(static_cast<int>(next() * 4.0f)) * quarter;
@@ -303,22 +313,133 @@ void place_props(const city::Building& b, std::vector<PropInstance>& props, std:
         }
 }
 
+PointLight sign_light(const SignInstance& s) {
+    const std::uint32_t h = s.seed;
+    Rgb c = neon_color(shader_hash(h));
+    float emit = 0.8f;         // average radiance over the sign's area
+    float out = 0.8f, dz = 0.0f;  // light position: in front of the face, and vertical shift
+    const float area = s.width * s.height;
+    switch (s.kind()) {
+        case SignStyle::NeonText:  // letters only, lighting the roof they stand on
+            if (shader_hash_f(h ^ 0x7eu) < 0.8f) c = neon_warm(h);
+            emit = 1.1f;
+            out = 0.0f;
+            dz = -s.height * 0.45f;
+            break;
+        case SignStyle::Blade:  // two-sided, sticks out of the wall
+            if (shader_hash_f(h ^ 0x7eu) < 0.55f) c = neon_warm(h);
+            emit = 0.9f;
+            out = 0.0f;
+            break;
+        case SignStyle::WallPanel:
+            if (shader_hash_f(h ^ 0x44u) < 0.5f) c = mix(c, {1.0f, 1.0f, 1.0f}, 0.25f);
+            emit = 0.7f;
+            break;
+        case SignStyle::Screen:  // the creative cycles: a neutral, slightly cool average
+            c = mix(neon_color(shader_hash(h ^ 0x5cu)), {0.7f, 0.75f, 1.0f}, 0.6f);
+            emit = 0.9f;
+            out = 0.25f * std::sqrt(area);
+            break;
+        case SignStyle::Rooftop:
+            c = mix(c, neon_color(shader_hash(h ^ 0x51u)), 0.5f);
+            emit = 0.6f;
+            out = 0.2f * std::sqrt(area);
+            break;
+    }
+    const float power = std::min(emit * area, 900.0f);
+    const float nx = std::cos(s.yaw), ny = std::sin(s.yaw);
+    const float radius = std::clamp(std::sqrt(power) * 4.5f, 4.0f, 48.0f);
+    return {s.x + nx * out, s.y + ny * out, s.z + dz, radius, c.r * power, c.g * power, c.b * power, 0.0f};
+}
+
+std::vector<std::uint32_t> build_light_grid(const std::vector<PointLight>& lights, float ox, float oy, float extent) {
+    constexpr std::uint32_t n = kLightGridSize;
+    const float cell = extent / static_cast<float>(n);
+    std::vector<std::vector<std::uint32_t>> bins(kLightGridCells);
+    for (std::uint32_t i = 0; i < lights.size(); ++i) {
+        const PointLight& l = lights[i];
+        const auto lo = [&](float v, float o) { return std::clamp(static_cast<int>(std::floor((v - o) / cell)), 0, int(n) - 1); };
+        const int x0 = lo(l.x - l.radius, ox), x1 = lo(l.x + l.radius, ox);
+        const int y0 = lo(l.y - l.radius, oy), y1 = lo(l.y + l.radius, oy);
+        for (int y = y0; y <= y1; ++y)
+            for (int x = x0; x <= x1; ++x) {
+                // Circle vs cell rectangle (in plan; lights reach any height within radius).
+                const float cx0 = ox + static_cast<float>(x) * cell, cy0 = oy + static_cast<float>(y) * cell;
+                const float dx = l.x - std::clamp(l.x, cx0, cx0 + cell), dy = l.y - std::clamp(l.y, cy0, cy0 + cell);
+                if (dx * dx + dy * dy <= l.radius * l.radius)
+                    bins[static_cast<std::size_t>(y) * n + static_cast<std::size_t>(x)].push_back(i);
+            }
+    }
+    std::vector<std::uint32_t> grid(std::size_t{kLightGridCells} * 2);
+    for (std::uint32_t c = 0; c < kLightGridCells; ++c) {
+        auto& bin = bins[c];
+        if (bin.size() > kMaxLightsPerCell) {
+            // Keep the lights that matter most at the cell centre.
+            const float px = ox + (static_cast<float>(c % n) + 0.5f) * cell;
+            const float py = oy + (static_cast<float>(c / n) + 0.5f) * cell;
+            auto weight = [&](std::uint32_t i) {
+                const PointLight& l = lights[i];
+                const float d2 = (l.x - px) * (l.x - px) + (l.y - py) * (l.y - py);
+                return (l.r + l.g + l.b) / (d2 + 25.0f);
+            };
+            std::partial_sort(bin.begin(), bin.begin() + kMaxLightsPerCell, bin.end(),
+                              [&](std::uint32_t a, std::uint32_t b) { return weight(a) > weight(b); });
+            bin.resize(kMaxLightsPerCell);
+        }
+        grid[2 * c] = static_cast<std::uint32_t>(grid.size());
+        grid[2 * c + 1] = static_cast<std::uint32_t>(bin.size());
+        grid.insert(grid.end(), bin.begin(), bin.end());
+    }
+    return grid;
+}
+
 std::shared_ptr<const CitySnapshot> build_snapshot(const city::Params& p, std::int32_t ctx,
                                                    std::int32_t cty, float tile_size,
                                                    std::int32_t radius) {
     auto snap = std::make_shared<CitySnapshot>();
     snap->center_tx = ctx;
     snap->center_ty = cty;
+    // Full-detail meshes near the streaming centre, massing-only meshes beyond.
+    const float cx = (static_cast<float>(ctx) + 0.5f) * tile_size, cy = (static_cast<float>(cty) + 0.5f) * tile_size;
+    const float detail_radius = tile_size * 2.6f;
+    CityMesh& mesh = snap->mesh;
     for (std::int32_t ty = cty - radius; ty <= cty + radius; ++ty)
-        for (std::int32_t tx = ctx - radius; tx <= ctx + radius; ++tx)
+        for (std::int32_t tx = ctx - radius; tx <= ctx + radius; ++tx) {
+            MeshChunk chunk;
+            chunk.first_index = static_cast<std::uint32_t>(mesh.indices.size());
+            chunk.min[0] = chunk.min[1] = chunk.min[2] = 1e30f;
+            chunk.max[0] = chunk.max[1] = chunk.max[2] = -1e30f;
             for (const city::Building& b : city::generate_tile(p, tx, ty, tile_size)) {
+                const auto first_box = static_cast<std::uint32_t>(snap->buildings.size());
                 add_building_boxes(b, snap->buildings);
+                for (std::size_t i = first_box; i < snap->buildings.size(); ++i)
+                    snap->buildings[i].flags |= BuildingInstance::kMeshed;
+                const std::size_t first_sign = snap->signs.size();
                 place_signs(b, snap->signs);
                 place_props(b, snap->props, snap->lights);
+                const float d = std::hypot(b.x - cx, b.y - cy);
+                build_building_mesh(b, first_box,
+                                    std::span<const SignInstance>(snap->signs).subspan(first_sign),
+                                    d < detail_radius ? MeshDetail::Full : MeshDetail::Massing, mesh,
+                                    snap->point_lights);
+                const float r = b.footprint * 0.5f + 5.0f;  // attachments stick out a little
+                chunk.min[0] = std::min(chunk.min[0], b.x - r);
+                chunk.min[1] = std::min(chunk.min[1], b.y - r);
+                chunk.max[0] = std::max(chunk.max[0], b.x + r);
+                chunk.max[1] = std::max(chunk.max[1], b.y + r);
+                chunk.max[2] = std::max(chunk.max[2], b.height + 20.0f);
             }
+            chunk.min[2] = 0.0f;
+            chunk.index_count = static_cast<std::uint32_t>(mesh.indices.size()) - chunk.first_index;
+            if (chunk.index_count) mesh.chunks.push_back(chunk);
+        }
+
+    for (const SignInstance& s : snap->signs) snap->point_lights.push_back(sign_light(s));
 
     RoadField& rf = snap->roads;
     const float extent = static_cast<float>(2 * radius + 1) * tile_size;
+    snap->light_grid = build_light_grid(snap->point_lights, static_cast<float>(ctx - radius) * tile_size,
+                                        static_cast<float>(cty - radius) * tile_size, extent);
     rf.texel = extent / static_cast<float>(RoadField::kSize);
     rf.origin_x = static_cast<float>(ctx - radius) * tile_size;
     rf.origin_y = static_cast<float>(cty - radius) * tile_size;

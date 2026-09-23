@@ -78,6 +78,28 @@ Mat4 inverse(const Mat4& a) {
     return r;
 }
 
+// Clip-space planes of a view-projection matrix (reversed-Z infinite: no far plane).
+struct Frustum {
+    float planes[5][4];
+    bool visible(const float mn[3], const float mx[3]) const {
+        for (const auto& p : planes) {
+            // Corner furthest along the plane normal.
+            const float x = p[0] >= 0 ? mx[0] : mn[0], y = p[1] >= 0 ? mx[1] : mn[1], z = p[2] >= 0 ? mx[2] : mn[2];
+            if (p[0] * x + p[1] * y + p[2] * z + p[3] < 0.0f) return false;
+        }
+        return true;
+    }
+};
+Frustum frustum_of(const Mat4& m) {
+    auto row = [&](int r, int c) { return m.at(c, r); };
+    Frustum f{};
+    const int rows[5][2] = {{0, 1}, {0, -1}, {1, 1}, {1, -1}, {2, -1}};  // w+x, w-x, w+y, w-y, w-z (near)
+    for (int i = 0; i < 5; ++i)
+        for (int c = 0; c < 4; ++c)
+            f.planes[i][c] = row(3, c) + static_cast<float>(rows[i][1]) * row(rows[i][0], c);
+    return f;
+}
+
 enum class Blend { None, Additive, Alpha };
 
 struct PipelineDesc {
@@ -89,6 +111,8 @@ struct PipelineDesc {
     bool depth_test = false, depth_write = false;
     VkCompareOp depth_op = VK_COMPARE_OP_GREATER;
     Blend blend = Blend::None;
+    std::span<const VkVertexInputBindingDescription> vertex_bindings;
+    std::span<const VkVertexInputAttributeDescription> vertex_attributes;
 };
 
 VkPipeline make_pipeline(const vk::Context& ctx, const PipelineDesc& d) {
@@ -99,6 +123,10 @@ VkPipeline make_pipeline(const vk::Context& ctx, const PipelineDesc& d) {
     stages[1] = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_FRAGMENT_BIT, fs, "main"};
 
     VkPipelineVertexInputStateCreateInfo vi{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
+    vi.vertexBindingDescriptionCount = static_cast<std::uint32_t>(d.vertex_bindings.size());
+    vi.pVertexBindingDescriptions = d.vertex_bindings.data();
+    vi.vertexAttributeDescriptionCount = static_cast<std::uint32_t>(d.vertex_attributes.size());
+    vi.pVertexAttributeDescriptions = d.vertex_attributes.data();
     VkPipelineInputAssemblyStateCreateInfo ia{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
     ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
     VkPipelineViewportStateCreateInfo vp{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
@@ -217,7 +245,8 @@ Renderer::~Renderer() {
     vkDeviceWaitIdle(dev);
     destroy_sized();
     for (VkPipeline p : {ground_pso_, buildings_pso_, signs_pso_, sky_pso_, rain_pso_, traffic_pso_, streetlife_pso_,
-                         beacon_pso_, signs_glow_pso_, props_pso_, lights_pso_, infra_pso_, resolve_pso_, bloom_down_pso_,
+                         beacon_pso_, signs_glow_pso_, props_pso_, lights_pso_, infra_pso_, detail_pso_, resolve_pso_,
+                         bloom_down_pso_,
                          bloom_up_pso_, tonemap_pso_})
         vkDestroyPipeline(dev, p, nullptr);
     vkDestroyPipeline(dev, hud_pso_, nullptr);
@@ -238,6 +267,10 @@ Renderer::~Renderer() {
     vk::destroy(ctx_, signs_);
     vk::destroy(ctx_, props_);
     vk::destroy(ctx_, lights_);
+    vk::destroy(ctx_, mesh_vertices_);
+    vk::destroy(ctx_, mesh_indices_);
+    vk::destroy(ctx_, point_lights_);
+    vk::destroy(ctx_, light_grid_);
     vk::destroy(ctx_, road_field_);
     vk::destroy(ctx_, sign_atlas_);
     vk::destroy(ctx_, sign_strings_);
@@ -266,6 +299,10 @@ void Renderer::create_static() {
     ensure_buffer(signs_, 64 * sizeof(SignInstance));
     ensure_buffer(props_, 64 * sizeof(PropInstance));
     ensure_buffer(lights_, 64 * sizeof(LightSprite));
+    ensure_buffer(point_lights_, 64 * sizeof(PointLight));
+    // An empty grid (all cells zero lights) until the first snapshot arrives.
+    ensure_buffer(light_grid_, kLightGridCells * 2 * sizeof(std::uint32_t));
+    std::memset(light_grid_.mapped, 0, kLightGridCells * 2 * sizeof(std::uint32_t));
 
     road_field_ = vk::create_image(ctx_, {RoadField::kSize, RoadField::kSize}, VK_FORMAT_R8_UNORM,
                                    VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
@@ -328,7 +365,7 @@ void Renderer::create_static() {
 
     // Descriptor set layouts.
     {
-        VkDescriptorSetLayoutBinding b[8]{};
+        VkDescriptorSetLayoutBinding b[10]{};
         const VkShaderStageFlags vf = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
         b[0] = {0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 1, vf, nullptr};
         b[1] = {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, vf, nullptr};
@@ -338,8 +375,10 @@ void Renderer::create_static() {
         b[5] = {5, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};          // sign strings
         b[6] = {6, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, vf, nullptr};  // rooftop props
         b[7] = {7, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, vf, nullptr};  // light sprites
+        b[8] = {8, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};  // point lights
+        b[9] = {9, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};  // light grid
         VkDescriptorSetLayoutCreateInfo ci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-        ci.bindingCount = 8;
+        ci.bindingCount = 10;
         ci.pBindings = b;
         VK_CHECK(vkCreateDescriptorSetLayout(dev, &ci, nullptr, &scene_set_layout_));
     }
@@ -370,7 +409,7 @@ void Renderer::create_static() {
     // Scene set lives in a pool that survives resizes.
     {
         VkDescriptorPoolSize sizes[] = {{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 1},
-                                        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 5},
+                                        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 7},
                                         {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2}};
         VkDescriptorPoolCreateInfo ci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
         ci.maxSets = 1;
@@ -451,7 +490,9 @@ void Renderer::write_scene_set() {
     VkDescriptorBufferInfo strings{sign_strings_.buffer, 0, VK_WHOLE_SIZE};
     VkDescriptorBufferInfo prp{props_.buffer, 0, VK_WHOLE_SIZE};
     VkDescriptorBufferInfo lts{lights_.buffer, 0, VK_WHOLE_SIZE};
-    VkWriteDescriptorSet w[8]{};
+    VkDescriptorBufferInfo pls{point_lights_.buffer, 0, VK_WHOLE_SIZE};
+    VkDescriptorBufferInfo grid{light_grid_.buffer, 0, VK_WHOLE_SIZE};
+    VkWriteDescriptorSet w[10]{};
     for (auto& x : w) {
         x.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         x.dstSet = scene_set_;
@@ -481,15 +522,21 @@ void Renderer::write_scene_set() {
     w[7].dstBinding = 7;
     w[7].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     w[7].pBufferInfo = &lts;
-    vkUpdateDescriptorSets(ctx_.device(), 8, w, 0, nullptr);
+    w[8].dstBinding = 8;
+    w[8].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    w[8].pBufferInfo = &pls;
+    w[9].dstBinding = 9;
+    w[9].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    w[9].pBufferInfo = &grid;
+    vkUpdateDescriptorSets(ctx_.device(), 10, w, 0, nullptr);
 }
 
-void Renderer::ensure_buffer(vk::Buffer& b, VkDeviceSize size) {
+void Renderer::ensure_buffer(vk::Buffer& b, VkDeviceSize size, VkBufferUsageFlags usage) {
     if (b.buffer && b.size >= size) return;
     vk::destroy(ctx_, b);
-    // Host-visible storage: mobile GPUs share memory with the CPU, and these buffers
-    // change only when the streaming window moves.
-    b = vk::create_buffer(ctx_, std::max<VkDeviceSize>(size * 3 / 2, 256), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
+    // Host-visible: mobile GPUs share memory with the CPU, and these buffers change only
+    // when the streaming window moves.
+    b = vk::create_buffer(ctx_, std::max<VkDeviceSize>(size * 5 / 4, 256), usage, true);
 }
 
 void Renderer::create_pipelines() {
@@ -512,6 +559,23 @@ void Renderer::create_pipelines() {
     d.fs = sh::buildings_frag;
     d.cull = VK_CULL_MODE_BACK_BIT;
     buildings_pso_ = make_pipeline(ctx_, d);
+
+    {
+        // Detailed building meshes: MeshVertex (city_mesh.hpp).
+        const VkVertexInputBindingDescription binding{0, sizeof(MeshVertex), VK_VERTEX_INPUT_RATE_VERTEX};
+        const VkVertexInputAttributeDescription attrs[] = {
+            {0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(MeshVertex, x)},
+            {1, 0, VK_FORMAT_R8G8B8A8_SNORM, offsetof(MeshVertex, nx)},
+            {2, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(MeshVertex, u)},
+            {3, 0, VK_FORMAT_R32_UINT, offsetof(MeshVertex, building_material)},
+        };
+        PipelineDesc m = d;
+        m.vs = sh::detail_vert;
+        m.fs = sh::detail_frag;
+        m.vertex_bindings = std::span(&binding, 1);
+        m.vertex_attributes = attrs;
+        detail_pso_ = make_pipeline(ctx_, m);
+    }
 
     d.vs = sh::traffic_vert;
     d.fs = sh::traffic_frag;
@@ -685,6 +749,19 @@ void Renderer::upload_world(const CitySnapshot& snap) {
     if (ssize) std::memcpy(signs_.mapped, snap.signs.data(), ssize);
     if (psize) std::memcpy(props_.mapped, snap.props.data(), psize);
     if (lsize) std::memcpy(lights_.mapped, snap.lights.data(), lsize);
+    const VkDeviceSize vsize = snap.mesh.vertices.size() * sizeof(MeshVertex);
+    const VkDeviceSize isize = snap.mesh.indices.size() * sizeof(std::uint32_t);
+    ensure_buffer(mesh_vertices_, vsize, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
+    ensure_buffer(mesh_indices_, isize, VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
+    if (vsize) std::memcpy(mesh_vertices_.mapped, snap.mesh.vertices.data(), vsize);
+    if (isize) std::memcpy(mesh_indices_.mapped, snap.mesh.indices.data(), isize);
+    mesh_chunks_ = snap.mesh.chunks;
+    const VkDeviceSize plsize = snap.point_lights.size() * sizeof(PointLight);
+    const VkDeviceSize gsize = snap.light_grid.size() * sizeof(std::uint32_t);
+    ensure_buffer(point_lights_, plsize);
+    ensure_buffer(light_grid_, gsize);
+    if (plsize) std::memcpy(point_lights_.mapped, snap.point_lights.data(), plsize);
+    if (gsize) std::memcpy(light_grid_.mapped, snap.light_grid.data(), gsize);
     building_count_ = static_cast<std::uint32_t>(snap.buildings.size());
     sign_count_ = static_cast<std::uint32_t>(snap.signs.size());
     prop_count_ = static_cast<std::uint32_t>(snap.props.size());
@@ -720,6 +797,7 @@ void Renderer::update_frame_ubo(std::uint32_t slot, const Game& game) {
     u.view = cam.view();
     u.proj = cam.projection(aspect);
     u.view_proj = u.proj * u.view;
+    view_proj_ = u.view_proj;
     u.inv_view_proj = inverse(u.view_proj);
     u.camera_pos[0] = cam.position.x;
     u.camera_pos[1] = cam.position.y;
@@ -832,6 +910,15 @@ void Renderer::record(VkCommandBuffer cmd, std::uint32_t slot, const Game& game,
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, scene_layout_, 0, 1, &scene_set_, 1, &offset);
 
         // Front-to-back-ish: buildings occlude most of the ground.
+        if (!mesh_chunks_.empty()) {
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, detail_pso_);
+            const VkDeviceSize zero = 0;
+            vkCmdBindVertexBuffers(cmd, 0, 1, &mesh_vertices_.buffer, &zero);
+            vkCmdBindIndexBuffer(cmd, mesh_indices_.buffer, 0, VK_INDEX_TYPE_UINT32);
+            const Frustum fr = frustum_of(view_proj_);
+            for (const MeshChunk& c : mesh_chunks_)
+                if (fr.visible(c.min, c.max)) vkCmdDrawIndexed(cmd, c.index_count, 1, c.first_index, 0, 0);
+        }
         if (building_count_) {
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, buildings_pso_);
             vkCmdDraw(cmd, 30, building_count_, 0, 0);

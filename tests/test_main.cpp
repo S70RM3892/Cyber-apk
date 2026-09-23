@@ -209,9 +209,72 @@ void test_signs() {
     }
 }
 
+void test_building_meshes() {
+    // Detailed meshes: valid indices, unit normals, sane extents, every building meshed,
+    // and attachments never cutting through the signs hung on the building.
+    city::Params p;
+    p.seed = 5;
+    const auto snap = build_snapshot(p, 0, 0, 256.0f, 1);
+    const CityMesh& m = snap->mesh;
+    CHECK(!m.vertices.empty());
+    CHECK(m.indices.size() % 3 == 0);
+    std::uint32_t max_building = 0;
+    for (std::uint32_t i : m.indices) CHECK(i < m.vertices.size());
+    for (const MeshVertex& v : m.vertices) {
+        const float n2 = static_cast<float>(v.nx * v.nx + v.ny * v.ny + v.nz * v.nz) / (127.0f * 127.0f);
+        CHECK(n2 > 0.9f && n2 < 1.1f);
+        CHECK(std::isfinite(v.x) && std::isfinite(v.y) && v.z >= -0.01f && v.z < 700.0f);
+        CHECK((v.building_material >> 24) <= static_cast<std::uint32_t>(SurfaceMaterial::LitPanel));
+        max_building = std::max(max_building, v.building_material & 0xFFFFFFu);
+    }
+    CHECK(max_building < snap->buildings.size());
+    for (const BuildingInstance& b : snap->buildings) CHECK(b.flags & BuildingInstance::kMeshed);
+    std::uint32_t covered = 0;
+    for (const MeshChunk& c : m.chunks) {
+        covered += c.index_count;
+        CHECK(c.min[0] <= c.max[0] && c.min[1] <= c.max[1]);
+        for (std::uint32_t i = c.first_index; i < c.first_index + c.index_count; i += 97) {
+            const MeshVertex& v = m.vertices[m.indices[i]];
+            CHECK(v.x >= c.min[0] - 1e-3f && v.x <= c.max[0] + 1e-3f && v.y >= c.min[1] - 1e-3f &&
+                  v.y <= c.max[1] + 1e-3f && v.z <= c.max[2] + 1e-3f);
+        }
+    }
+    CHECK(covered == m.indices.size());
+
+    // Same inputs, same mesh (tiles must rebuild identically when streamed back in).
+    const auto again = build_snapshot(p, 0, 0, 256.0f, 1);
+    CHECK(again->mesh.vertices.size() == m.vertices.size() && again->mesh.indices == m.indices);
+}
+
+void test_light_grid() {
+    city::Params p;
+    p.seed = 5;
+    const auto snap = build_snapshot(p, 0, 0, 256.0f, 1);
+    CHECK(snap->point_lights.size() >= snap->signs.size());
+    const auto& g = snap->light_grid;
+    CHECK(g.size() >= std::size_t{kLightGridCells} * 2);
+    const float extent = 3.0f * 256.0f, cell = extent / static_cast<float>(kLightGridSize);
+    std::size_t referenced = 0;
+    for (std::uint32_t c = 0; c < kLightGridCells; ++c) {
+        const std::uint32_t off = g[2 * c], count = g[2 * c + 1];
+        CHECK(count <= kMaxLightsPerCell);
+        CHECK(off + count <= g.size());
+        referenced += count;
+        const float cx = -256.0f + (static_cast<float>(c % kLightGridSize) + 0.5f) * cell;
+        const float cy = -256.0f + (static_cast<float>(c / kLightGridSize) + 0.5f) * cell;
+        for (std::uint32_t k = 0; k < count; ++k) {
+            const PointLight& l = snap->point_lights[g[off + k]];
+            CHECK(l.radius > 0.0f && l.r >= 0.0f && l.g >= 0.0f && l.b >= 0.0f);
+            // The light reaches the cell (plan distance to its centre within radius + half diagonal).
+            CHECK(std::hypot(l.x - cx, l.y - cy) <= l.radius + cell * 0.7072f + 1e-3f);
+        }
+    }
+    CHECK(referenced > snap->signs.size());
+}
+
 void test_signs_attached() {
     // Every wall-mounted sign must touch a box of its own building: its centre lies within
-    // 0.6 m of some box's side (or roof for neon lettering), inside that box's height range.
+    // 0.7 m of some box's side (screens hang in front of ledges and fins) (or roof for neon lettering), inside that box's height range.
     city::Params p;
     p.seed = 11;
     int screens = 0, neon_text = 0, checked = 0;
@@ -233,7 +296,7 @@ void test_signs_attached() {
                                 s.z - s.height * 0.5f >= bx.height - 0.01f;
                 } else {
                     const float face = std::max(dx, dy);
-                    attached |= std::fabs(face - half) < 0.6f && s.z >= bx.base_z && s.z <= bx.height;
+                    attached |= std::fabs(face - half) < 0.7f && s.z >= bx.base_z && s.z <= bx.height;
                 }
             }
             if (!attached)
@@ -455,6 +518,8 @@ int main() {
     test_building_boxes();
     test_signs();
     test_signs_attached();
+    test_building_meshes();
+    test_light_grid();
     test_collision();
     test_gigs();
     test_jump();

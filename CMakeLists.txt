@@ -24,6 +24,7 @@ add_library(apex_core
     engine/src/cluster_cull.cpp
     engine/src/citygen.cpp
     engine/src/world.cpp
+    engine/src/buildgen.cpp
     engine/src/game.cpp
     engine/src/hud.cpp
     engine/src/audio.cpp
@@ -46,7 +47,7 @@ set(APEX_SHADERS
     buildings.vert buildings.frag ground.vert ground.frag signs.vert signs.frag
     fullscreen.vert sky.frag rain.vert rain.frag traffic.vert traffic.frag hud.vert hud.frag
     streetlife.vert streetlife.frag beacon.vert beacon.frag signs_glow.frag
-    props.vert props.frag lights.vert lights.frag infra.vert infra.frag
+    props.vert props.frag lights.vert lights.frag infra.vert infra.frag detail.vert detail.frag
     resolve.frag bloom_down.frag bloom_up.frag tonemap.frag
 )
 file(GLOB APEX_SHADER_INCLUDES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/shaders/include/*.glsl)

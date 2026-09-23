@@ -8,6 +8,7 @@
 #include <memory>
 #include <vector>
 
+#include "apex/city_mesh.hpp"
 #include "apex/citygen.hpp"
 #include "apex/math.hpp"
 
@@ -23,6 +24,7 @@ struct BuildingInstance {
     float base_z;                    // bottom of this box (metres)
     static constexpr std::uint32_t kTopTier = 1;
     static constexpr std::uint32_t kShanty = 2;
+    static constexpr std::uint32_t kMeshed = 4;  // drawn from CitySnapshot::mesh; the box is collision only
 };
 static_assert(sizeof(BuildingInstance) == 32);
 
@@ -80,12 +82,21 @@ struct RoadField {
     std::vector<std::uint8_t> data;    // kSize * kSize
 };
 
+// Lights are binned into a kLightGridSize^2 grid over the same square as the road field.
+// light_grid holds (offset, count) per cell, then the light indices the offsets point at.
+inline constexpr std::uint32_t kLightGridSize = 128;
+inline constexpr std::uint32_t kLightGridCells = kLightGridSize * kLightGridSize;
+inline constexpr std::uint32_t kMaxLightsPerCell = 24;
+
 struct CitySnapshot {
     std::int32_t center_tx = 0, center_ty = 0;
     std::vector<BuildingInstance> buildings;
     std::vector<SignInstance> signs;
     std::vector<PropInstance> props;
     std::vector<LightSprite> lights;
+    CityMesh mesh;
+    std::vector<PointLight> point_lights;
+    std::vector<std::uint32_t> light_grid;
     RoadField roads;
 };
 
@@ -97,6 +108,13 @@ void place_props(const city::Building& b, std::vector<PropInstance>& props, std:
 
 // Deterministic sign placement for one building (exposed for tests).
 void place_signs(const city::Building& b, std::vector<SignInstance>& out);
+
+// The light a sign casts on its surroundings (colour matches shaders/include/signs_common.glsl).
+PointLight sign_light(const SignInstance& s);
+
+// Bin lights into the grid (see CitySnapshot::light_grid); origin/extent of the square.
+std::vector<std::uint32_t> build_light_grid(const std::vector<PointLight>& lights, float origin_x, float origin_y,
+                                            float extent);
 
 // Build a snapshot synchronously (used by the worker and by tests).
 std::shared_ptr<const CitySnapshot> build_snapshot(const city::Params& p, std::int32_t center_tx,

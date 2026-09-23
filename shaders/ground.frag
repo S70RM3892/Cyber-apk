@@ -5,6 +5,7 @@
 // analytic street-lamp pools (an infinite periodic lattice of lights, no light list).
 #include "include/city_common.glsl"
 #include "include/street_layout.glsl"
+#include "include/lighting.glsl"
 
 layout(location = 0) in vec3 in_world_pos;
 
@@ -72,7 +73,12 @@ void main()
     spill *= 0.05 * (1.0 - on_art);
 
     vec3 ambient = vec3(0.012, 0.012, 0.03);
-    vec3 lit = albedo * (ambient * 4.0 + lamps + spill_col * spill * 8.0);
+    // Neon signs and shopfronts light the wet street; puddles take sharp highlights.
+    vec3 view_dir = normalize(in_world_pos - frame.camera_pos.xyz);
+    vec3 neon_diffuse, neon_spec;
+    local_lights(vec3(p, 0.02), vec3(0.0, 0.0, 1.0), view_dir, mix(40.0, 600.0, puddle), neon_diffuse, neon_spec);
+    vec3 lit = albedo * (ambient * 4.0 + lamps + spill_col * spill * 8.0 + neon_diffuse * 0.8) +
+               neon_spec * mix(0.15, 0.6, puddle) * rain;
 
     // Puddle ripples from rain: perturb the reflection normal.
     vec2 ripple = vec2(0.0);

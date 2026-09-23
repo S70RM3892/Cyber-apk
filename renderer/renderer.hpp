@@ -91,6 +91,10 @@ private:
     vk::Buffer frame_ubo_;  // kFramesInFlight slots, dynamic offset
     VkDeviceSize ubo_stride_ = 0;
     vk::Buffer buildings_, signs_, props_, lights_;
+    vk::Buffer mesh_vertices_, mesh_indices_;  // detailed building meshes
+    vk::Buffer point_lights_, light_grid_;     // local lights (signs, shopfronts) + 2D grid
+    std::vector<MeshChunk> mesh_chunks_;
+    Mat4 view_proj_;
     std::uint32_t building_count_ = 0, sign_count_ = 0, prop_count_ = 0, light_count_ = 0;
     vk::Image road_field_;
     vk::Image sign_atlas_;   // SDF glyphs for neon text (assets/sign_font_sdf.bin)
@@ -117,7 +121,7 @@ private:
                sky_pso_ = VK_NULL_HANDLE, rain_pso_ = VK_NULL_HANDLE, traffic_pso_ = VK_NULL_HANDLE,
                streetlife_pso_ = VK_NULL_HANDLE, beacon_pso_ = VK_NULL_HANDLE,
                signs_glow_pso_ = VK_NULL_HANDLE, props_pso_ = VK_NULL_HANDLE, lights_pso_ = VK_NULL_HANDLE,
-               infra_pso_ = VK_NULL_HANDLE;
+               infra_pso_ = VK_NULL_HANDLE, detail_pso_ = VK_NULL_HANDLE;
     VkPipeline resolve_pso_ = VK_NULL_HANDLE, bloom_down_pso_ = VK_NULL_HANDLE, bloom_up_pso_ = VK_NULL_HANDLE,
                tonemap_pso_ = VK_NULL_HANDLE;
 
@@ -143,7 +147,8 @@ private:
     void create_sized();
     void destroy_sized();
     void write_scene_set();
-    void ensure_buffer(vk::Buffer& b, VkDeviceSize size);
+    void ensure_buffer(vk::Buffer& b, VkDeviceSize size,
+                       VkBufferUsageFlags usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
     void update_frame_ubo(std::uint32_t slot, const Game& game);
     void fullscreen_pass(VkCommandBuffer cmd, VkImageView target, VkExtent2D extent, VkPipeline pso,
                          VkDescriptorSet set, std::uint32_t slot, const void* push, std::uint32_t push_size,
