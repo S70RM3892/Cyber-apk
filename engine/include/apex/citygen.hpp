@@ -44,11 +44,12 @@ DistrictSample sample(const Params& p, float x, float y);
 // A building placed from the modular kit (spec §5 "モジュールアセンブリ").
 // Rendering instantiates `module_id` with GPU instancing; nothing here is unique geometry.
 struct Building {
-    float x, y;             // lot centre (metres)
+    float x, y;             // centre (metres)
     float footprint;        // square footprint edge (metres)
     float height;           // metres
     std::uint16_t module_id;
     District district;
+    bool shanty = false;    // low-rise market / shack cluster building (corrugated roof)
 };
 
 // Expand all buildings whose lot centre lies inside the square tile

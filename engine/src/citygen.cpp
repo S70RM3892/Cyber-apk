@@ -134,7 +134,34 @@ std::vector<Building> generate_tile(const Params& p, std::int32_t tx, std::int32
                 case District::Count: break;
             }
             const auto module_id = static_cast<std::uint16_t>(module_base + static_cast<std::uint16_t>(u2 * 16.0f));
-            out.push_back({cx, cy, footprint, height, module_id, ds.district});
+
+            // Low-rise sprawl: some lots become clusters of 1-3 storey shacks and market
+            // halls split by alleys. They open sight lines over the rooftops to the towers.
+            const float u3 = unit(hash64(h ^ 2));
+            float shanty_chance = 0.0f;
+            switch (ds.district) {
+                case District::Residential: shanty_chance = 0.38f; break;
+                case District::Industrial: shanty_chance = 0.45f; break;
+                case District::Megastructure: shanty_chance = 0.2f; break;
+                default: break;
+            }
+            if (u3 < shanty_chance && footprint > 0.6f * max_footprint) {
+                const int k = unit(hash64(h ^ 3)) < 0.55f ? 2 : 3;
+                const float cell = footprint / static_cast<float>(k);
+                const float alley = 2.4f;
+                for (int sy = 0; sy < k; ++sy)
+                    for (int sx = 0; sx < k; ++sx) {
+                        const std::uint64_t hs = hash64(h ^ (0x100u + static_cast<std::uint64_t>(sy * k + sx)));
+                        const float jitter = (unit(hs) - 0.5f) * 0.25f * alley;
+                        const float bx = cx + (static_cast<float>(sx) + 0.5f - 0.5f * static_cast<float>(k)) * cell + jitter;
+                        const float by = cy + (static_cast<float>(sy) + 0.5f - 0.5f * static_cast<float>(k)) * cell;
+                        const float fp = cell - alley - std::fabs(jitter) * 2.0f;
+                        const float hgt = 3.8f + 8.0f * unit(hash64(hs));
+                        out.push_back({bx, by, fp, hgt, module_id, ds.district, true});
+                    }
+                continue;
+            }
+            out.push_back({cx, cy, footprint, height, module_id, ds.district, false});
         }
     }
     return out;

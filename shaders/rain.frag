@@ -8,6 +8,6 @@ layout(location = 1) out vec4 out_material;  // blended additively: zero leaves 
 void main()
 {
     float core = 1.0 - abs(in_u);
-    out_color = vec4(vec3(0.35, 0.38, 0.5) * core * in_alpha * 0.25, 0.0);
+    out_color = vec4(vec3(0.35, 0.38, 0.5) * core * in_alpha * 0.07, 0.0);
     out_material = vec4(0.0);
 }

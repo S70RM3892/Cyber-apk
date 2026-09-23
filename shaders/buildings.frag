@@ -31,6 +31,50 @@ vec3 window_light(uint h)
     return neon_color(hash_u(h ^ 0x5bd1e995u));        // neon-lit interior
 }
 
+// Low-rise shack walls: patchwork corrugated siding, small warm windows, roll-down
+// shutters or open stalls at street level.
+void shanty_wall(float u, float v, uint seed, uint face_seed, float height, vec3 ambient, float t,
+                 out vec3 color, out vec3 emissive)
+{
+    // Patchwork panels ~2 m wide, each its own paint / rust.
+    float panel_id = floor(u / 2.1);
+    uint ph = hash_u2(uvec2(uint(int(panel_id) + 4096), face_seed));
+    const vec3 paints[6] = vec3[6](vec3(0.09, 0.05, 0.035), vec3(0.04, 0.07, 0.07), vec3(0.06, 0.06, 0.06),
+                                   vec3(0.11, 0.03, 0.03), vec3(0.05, 0.05, 0.08), vec3(0.08, 0.07, 0.05));
+    vec3 albedo = paints[ph % 6u] * (0.75 + 0.5 * hash_f(ph ^ 5u));
+    float ribs = 0.8 + 0.2 * sin(u * 52.0);                       // vertical corrugation
+    float grime = 0.7 + 0.3 * value_noise(vec2(u * 0.7, v * 1.3) + float(seed & 255u));
+    albedo *= ribs * grime;
+    emissive = vec3(0.0);
+
+    // Street level: open stall (bright, colourful) or roll-down shutter.
+    float fw_v = fwidth(v), fw_u = fwidth(u);
+    if (v < 3.2) {
+        uint sh = hash_u2(uvec2(uint(int(floor(u / 3.0)) + 777), face_seed));
+        float stall = step(0.45, hash_f(sh));
+        float opening = clamp((min(fract(u / 3.0) - 0.06, 0.94 - fract(u / 3.0))) / max(fw_u / 3.0, 1e-4) + 0.5, 0.0, 1.0) *
+                        clamp((min(v - 0.2, 2.7 - v)) / max(fw_v, 1e-4) + 0.5, 0.0, 1.0);
+        vec3 inside = mix(vec3(1.0, 0.7, 0.45), neon_color(sh), 0.5) * (0.25 + 0.15 * sin(v * 9.0 + float(sh)));
+        vec3 shutter = vec3(0.07, 0.075, 0.08) * (0.8 + 0.2 * step(0.5, fract(v * 6.0)));
+        albedo = mix(albedo, stall > 0.5 ? vec3(0.0) : shutter, opening);
+        emissive += stall * opening * inside;
+        // Awning strip above the stall glows faintly.
+        float awning = clamp((0.12 - abs(v - 2.9)) / max(fw_v, 1e-4), 0.0, 1.0) * stall;
+        emissive += awning * neon_color(sh ^ 3u) * 0.9;
+    } else if (v < height - 0.4) {
+        // Small windows on the upper floors.
+        vec2 g = vec2(u / 2.1, (v - 3.2) / 2.8);
+        vec2 f = fract(g);
+        uint wh = hash_u3(uvec3(ucell(g), face_seed));
+        float win = clamp((min(f.x - 0.3, 0.7 - f.x)) / max(fwidth(g.x), 1e-4) + 0.5, 0.0, 1.0) *
+                    clamp((min(f.y - 0.35, 0.8 - f.y)) / max(fwidth(g.y), 1e-4) + 0.5, 0.0, 1.0);
+        float lit = step(hash_f(wh), 0.45);
+        emissive += win * lit * vec3(1.0, 0.6, 0.3) * (0.12 + 0.15 * hash_f(wh ^ 9u));
+        albedo = mix(albedo, vec3(0.01, 0.015, 0.02), win * (1.0 - lit));
+    }
+    color = albedo * ambient * 6.0;
+}
+
 void main()
 {
     Building b = buildings[in_instance];
@@ -50,15 +94,40 @@ void main()
     // Ambient: dark sky from above + coloured street glow from below.
     float street_glow = exp(-max(p.z, 0.0) / 14.0);
     vec3 glow_tint = mix(neon_color(hash_u(seed)), neon_color(hash_u(seed + 7u)), 0.5);
-    vec3 ambient = vec3(0.008, 0.014, 0.017) + (glow_tint * 0.6 + vec3(0.4, 0.05, 0.08)) * street_glow * 0.12;
+    vec3 ambient = vec3(0.008, 0.013, 0.015) + (glow_tint * 0.5 + vec3(0.25, 0.03, 0.04)) * street_glow * 0.06;
+
+    bool shanty = (b.seed_district_flags_base.z & kShanty) != 0u;
+    vec4 material = vec4(0.0, 1.0, 0.5, 0.5);  // reflectivity, roughness, normal perturbation
 
     if (n.z > 0.5) {
-        // Roofs: dark, with scattered equipment lights and a lit parapet edge.
-        vec2 cell = floor(p.xy / 3.0);
-        float lamp = step(0.985, hash_f3(uvec3(ucell(cell), seed)));
-        vec2 f = fract(p.xy / 3.0) - 0.5;
-        emissive += lamp * smoothstep(0.25, 0.0, length(f)) * vec3(1.0, 0.25, 0.1) * 5.0;
-        color = base_albedo * ambient * 4.0;
+        if (shanty) {
+            // Wet corrugated metal: ridges along one axis, rusty patches, puddled troughs.
+            bool along_x = (seed & 1u) == 0u;
+            float c = along_x ? p.y : p.x;
+            float ridge = sin(c * 40.0);
+            float fw_c = fwidth(c * 40.0);
+            float ridge_aa = ridge * (1.0 - smoothstep(0.5, 2.0, fw_c));  // flatten when sub-pixel
+            float rust = smoothstep(0.35, 0.75, fbm(p.xy * 0.35 + float(seed & 1023u)));
+            vec3 metal = mix(vec3(0.05, 0.055, 0.06), vec3(0.09, 0.045, 0.03), rust);
+            color = metal * (0.8 + 0.2 * ridge_aa) * ambient * 5.0;
+            vec2 perturb = along_x ? vec2(0.0, cos(c * 40.0) * 0.35) : vec2(cos(c * 40.0) * 0.35, 0.0);
+            perturb *= 1.0 - smoothstep(0.5, 2.0, fw_c);
+            material = vec4(mix(0.55, 0.2, rust) * frame.fog.w, mix(0.12, 0.4, rust), perturb * 0.5 + 0.5);
+        } else {
+            // Flat roofs: dark wet tar with scattered equipment lights.
+            vec2 cell = floor(p.xy / 3.0);
+            float lamp = step(0.985, hash_f3(uvec3(ucell(cell), seed)));
+            vec2 f = fract(p.xy / 3.0) - 0.5;
+            emissive += lamp * smoothstep(0.25, 0.0, length(f)) * vec3(1.0, 0.25, 0.1) * 5.0;
+            color = base_albedo * ambient * 4.0;
+            float puddle = smoothstep(0.5, 0.65, fbm(p.xy * 0.2 + float(seed & 511u)));
+            material = vec4(mix(0.25, 0.7, puddle) * frame.fog.w, mix(0.3, 0.05, puddle), 0.5, 0.5);
+        }
+    } else if (shanty) {
+        float u = dot(p.xy - b.pos_size.xy, vec2(-n.y, n.x));
+        float face_id = dot(n.xy, vec2(1.0, 2.0));
+        uint face_seed = hash_u(seed ^ uint(int(face_id) + 3));
+        shanty_wall(u, p.z, seed, face_seed, b.pos_size.w, ambient, t, color, emissive);
     } else {
         // Wall coordinates: u along the wall, v up.
         float u = dot(p.xy - b.pos_size.xy, vec2(-n.y, n.x));
@@ -96,7 +165,8 @@ void main()
             float ceiling = mix(0.25, 1.0, smoothstep(0.45, 0.95, f.y));
             float fixtures = mix(0.6, 1.0, aa_box(fract(u / 3.0), 0.2, 0.8, fwidth(u / 3.0)));
             vec3 near_w = glass * floor_lit * bay_lit * office * ceiling * fixtures * 0.3;
-            windows = mix(near_w, office * 0.25 * 0.75 * 0.82 * 0.5 * 0.3, far_blend);
+            // Far away the office grid becomes a field of pale dots: keep its average up.
+            windows = mix(near_w, office * 0.25 * 0.75 * 0.82 * 0.5 * 0.55, far_blend);
         } else {
             float wx0 = style == 2u ? 0.2 : 0.22, wy0 = style == 2u ? 0.3 : 0.32;
             glass = aa_box(f.x, wx0, 1.0 - wx0, fw.x) * aa_box(f.y, wy0, 0.80, fw.y);
@@ -113,7 +183,7 @@ void main()
             float blind = mix(0.3, 1.0, smoothstep(0.84, 0.4, f.y));
             vec3 wl = window_light(cell_hash) * (0.15 + 0.4 * hash_f(cell_hash ^ 0x77u)) * blind * flicker;
             float coverage = (1.0 - 2.0 * wx0) * (0.80 - wy0);
-            windows = mix(glass * lit * wl, vec3(0.8, 0.62, 0.48) * occupancy * coverage * 0.6, far_blend);
+            windows = mix(glass * lit * wl, vec3(0.75, 0.62, 0.5) * occupancy * coverage * 0.5, far_blend);
         }
 
         // Street level (ground tier only): shopfront band with bright interiors.
@@ -137,31 +207,25 @@ void main()
 
         // LED edge strips on corporate towers, accent bands on megastructures.
         vec3 accent = neon_color(hash_u(seed ^ 0xbeefu));
-        if (district == 1u) {
+        if (district == 1u && hash_f(seed ^ 0x51edu) < 0.3) {
+            // A minority of towers carry LED corner strips (on the upper part only), so the
+            // skyline reads as solid masses rather than wireframes.
             float strip = aa_box(edge, 0.0, 0.3, fwidth(edge));
             float pulse = 0.75 + 0.25 * sin(t * 1.5 - v * 0.08);
-            emissive += strip * accent * 4.0 * pulse * step(base_z + 1.0, v);
-        } else if (district == 0u) {
-            float band_v = fract(v / (floor_h * 6.0));
-            float band = aa_box(band_v, 0.0, 0.03, fwidth(v / (floor_h * 6.0)));
-            emissive += band * accent * 3.0 * step(10.0, v);
+            emissive += strip * accent * 3.0 * pulse * step(b.pos_size.w * 0.6, v);
+        } else if (district == 0u && hash_f(seed ^ 0xbadu) < 0.35) {
+            float band_v = fract(v / (floor_h * 10.0));
+            float band = aa_box(band_v, 0.0, 0.025, fwidth(v / (floor_h * 10.0)));
+            emissive += band * accent * 1.8 * step(10.0, v);
         }
         // Lit cornice where a setback steps in.
         float cornice = aa_box(v, b.pos_size.w - 0.5, b.pos_size.w, fwidth(v)) * (top_tier ? 0.3 : 1.0);
-        emissive += cornice * accent * 2.0 * step(20.0, v);
-
-        // Aviation lights on the roof corners of tall towers.
-        if (top_tier && b.pos_size.w > 90.0) {
-            float top = aa_box(v, b.pos_size.w - 1.2, b.pos_size.w - 0.4, fwidth(v));
-            float corner = aa_box(edge, 0.0, 0.8, fwidth(edge));
-            float blink = step(0.5, fract(t * 0.5 + hash_f(seed)));
-            emissive += top * corner * blink * vec3(1.0, 0.05, 0.02) * 30.0;
-        }
+        emissive += cornice * accent * 1.2 * step(20.0, v) * step(hash_f(seed ^ 0xc0u), 0.35);
 
         float panel = 0.85 + 0.3 * hash_f3(uvec3(ucell(cell), seed));
         color = (base_albedo * panel + extra_albedo) * ambient * 5.0 * (1.0 - glass * 0.6);
     }
 
     out_color = vec4(apply_fog(color + emissive, p), 1.0);
-    out_material = vec4(0.0, 1.0, 0.5, 0.5);
+    out_material = material;
 }

@@ -67,7 +67,7 @@ void main()
 
     // Grade: teal shadows, warm highlights, a little extra saturation.
     float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
-    c *= mix(vec3(0.80, 1.0, 1.10), vec3(1.07, 0.97, 0.93), smoothstep(0.02, 0.7, l));
+    c *= mix(vec3(0.92, 1.0, 1.03), vec3(1.07, 0.97, 0.93), smoothstep(0.02, 0.7, l));
     c = max(mix(vec3(l), c, 1.18), vec3(0.0));
     c = aces(c);
 

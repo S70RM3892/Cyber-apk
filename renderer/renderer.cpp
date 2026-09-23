@@ -217,7 +217,7 @@ Renderer::~Renderer() {
     vkDeviceWaitIdle(dev);
     destroy_sized();
     for (VkPipeline p : {ground_pso_, buildings_pso_, signs_pso_, sky_pso_, rain_pso_, traffic_pso_, streetlife_pso_,
-                         beacon_pso_, signs_glow_pso_, resolve_pso_, bloom_down_pso_,
+                         beacon_pso_, signs_glow_pso_, props_pso_, lights_pso_, infra_pso_, resolve_pso_, bloom_down_pso_,
                          bloom_up_pso_, tonemap_pso_})
         vkDestroyPipeline(dev, p, nullptr);
     vkDestroyPipeline(dev, hud_pso_, nullptr);
@@ -236,6 +236,8 @@ Renderer::~Renderer() {
     vk::destroy(ctx_, frame_ubo_);
     vk::destroy(ctx_, buildings_);
     vk::destroy(ctx_, signs_);
+    vk::destroy(ctx_, props_);
+    vk::destroy(ctx_, lights_);
     vk::destroy(ctx_, road_field_);
     vk::destroy(ctx_, sign_atlas_);
     vk::destroy(ctx_, sign_strings_);
@@ -262,6 +264,8 @@ void Renderer::create_static() {
     // Instance buffers start small and grow on demand.
     ensure_buffer(buildings_, 64 * sizeof(BuildingInstance));
     ensure_buffer(signs_, 64 * sizeof(SignInstance));
+    ensure_buffer(props_, 64 * sizeof(PropInstance));
+    ensure_buffer(lights_, 64 * sizeof(LightSprite));
 
     road_field_ = vk::create_image(ctx_, {RoadField::kSize, RoadField::kSize}, VK_FORMAT_R8_UNORM,
                                    VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
@@ -324,7 +328,7 @@ void Renderer::create_static() {
 
     // Descriptor set layouts.
     {
-        VkDescriptorSetLayoutBinding b[6]{};
+        VkDescriptorSetLayoutBinding b[8]{};
         const VkShaderStageFlags vf = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
         b[0] = {0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 1, vf, nullptr};
         b[1] = {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, vf, nullptr};
@@ -332,8 +336,10 @@ void Renderer::create_static() {
         b[3] = {3, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, vf, nullptr};  // vertex: arterial culling
         b[4] = {4, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};  // glyph atlas
         b[5] = {5, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};          // sign strings
+        b[6] = {6, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, vf, nullptr};  // rooftop props
+        b[7] = {7, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, vf, nullptr};  // light sprites
         VkDescriptorSetLayoutCreateInfo ci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-        ci.bindingCount = 6;
+        ci.bindingCount = 8;
         ci.pBindings = b;
         VK_CHECK(vkCreateDescriptorSetLayout(dev, &ci, nullptr, &scene_set_layout_));
     }
@@ -364,7 +370,7 @@ void Renderer::create_static() {
     // Scene set lives in a pool that survives resizes.
     {
         VkDescriptorPoolSize sizes[] = {{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 1},
-                                        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 3},
+                                        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 5},
                                         {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2}};
         VkDescriptorPoolCreateInfo ci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
         ci.maxSets = 1;
@@ -443,7 +449,9 @@ void Renderer::write_scene_set() {
     VkDescriptorImageInfo road{linear_clamp_, road_field_.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
     VkDescriptorImageInfo atlas{linear_clamp_, sign_atlas_.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
     VkDescriptorBufferInfo strings{sign_strings_.buffer, 0, VK_WHOLE_SIZE};
-    VkWriteDescriptorSet w[6]{};
+    VkDescriptorBufferInfo prp{props_.buffer, 0, VK_WHOLE_SIZE};
+    VkDescriptorBufferInfo lts{lights_.buffer, 0, VK_WHOLE_SIZE};
+    VkWriteDescriptorSet w[8]{};
     for (auto& x : w) {
         x.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         x.dstSet = scene_set_;
@@ -467,7 +475,13 @@ void Renderer::write_scene_set() {
     w[5].dstBinding = 5;
     w[5].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     w[5].pBufferInfo = &strings;
-    vkUpdateDescriptorSets(ctx_.device(), 6, w, 0, nullptr);
+    w[6].dstBinding = 6;
+    w[6].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    w[6].pBufferInfo = &prp;
+    w[7].dstBinding = 7;
+    w[7].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    w[7].pBufferInfo = &lts;
+    vkUpdateDescriptorSets(ctx_.device(), 8, w, 0, nullptr);
 }
 
 void Renderer::ensure_buffer(vk::Buffer& b, VkDeviceSize size) {
@@ -503,6 +517,16 @@ void Renderer::create_pipelines() {
     d.fs = sh::traffic_frag;
     traffic_pso_ = make_pipeline(ctx_, d);
 
+    d.vs = sh::infra_vert;
+    d.fs = sh::infra_frag;
+    infra_pso_ = make_pipeline(ctx_, d);
+
+    d.vs = sh::props_vert;
+    d.fs = sh::props_frag;
+    d.cull = VK_CULL_MODE_NONE;  // lattice frames are seen through
+    props_pso_ = make_pipeline(ctx_, d);
+    d.cull = VK_CULL_MODE_BACK_BIT;
+
     d.vs = sh::streetlife_vert;
     d.fs = sh::streetlife_frag;
     streetlife_pso_ = make_pipeline(ctx_, d);
@@ -533,6 +557,11 @@ void Renderer::create_pipelines() {
     d.fs = sh::signs_glow_frag;
     d.depth_op = VK_COMPARE_OP_GREATER_OR_EQUAL;
     signs_glow_pso_ = make_pipeline(ctx_, d);
+
+    d.vs = sh::lights_vert;
+    d.fs = sh::lights_frag;
+    d.depth_op = VK_COMPARE_OP_GREATER;
+    lights_pso_ = make_pipeline(ctx_, d);
 
     PipelineDesc p;
     p.layout = post_layout_;
@@ -648,10 +677,18 @@ void Renderer::upload_world(const CitySnapshot& snap) {
     const VkDeviceSize ssize = snap.signs.size() * sizeof(SignInstance);
     ensure_buffer(buildings_, bsize);
     ensure_buffer(signs_, ssize);
+    const VkDeviceSize psize = snap.props.size() * sizeof(PropInstance);
+    const VkDeviceSize lsize = snap.lights.size() * sizeof(LightSprite);
+    ensure_buffer(props_, psize);
+    ensure_buffer(lights_, lsize);
     if (bsize) std::memcpy(buildings_.mapped, snap.buildings.data(), bsize);
     if (ssize) std::memcpy(signs_.mapped, snap.signs.data(), ssize);
+    if (psize) std::memcpy(props_.mapped, snap.props.data(), psize);
+    if (lsize) std::memcpy(lights_.mapped, snap.lights.data(), lsize);
     building_count_ = static_cast<std::uint32_t>(snap.buildings.size());
     sign_count_ = static_cast<std::uint32_t>(snap.signs.size());
+    prop_count_ = static_cast<std::uint32_t>(snap.props.size());
+    light_count_ = static_cast<std::uint32_t>(snap.lights.size());
 
     std::memcpy(road_staging_.mapped, snap.roads.data.data(), snap.roads.data.size());
     {
@@ -800,6 +837,15 @@ void Renderer::record(VkCommandBuffer cmd, std::uint32_t slot, const Game& game,
             vkCmdDraw(cmd, 30, building_count_, 0, 0);
         }
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, traffic_pso_);
+        {
+            // Expressways: 5 boxes per segment, 2 families x 7 lines x 61 segments (infra.vert).
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, infra_pso_);
+            vkCmdDraw(cmd, 5 * 36, 2 * 7 * 61, 0, 0);
+        }
+        if (prop_count_) {
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, props_pso_);
+            vkCmdDraw(cmd, 36, prop_count_, 0, 0);
+        }
         // Two boxes per vehicle: body + cabin.
         if (settings_.traffic_count) vkCmdDraw(cmd, 72, settings_.traffic_count, 0, 0);
         if (game.car().spawned) vkCmdDraw(cmd, 72, 1, 0, kPlayerCarInstance);
@@ -826,6 +872,10 @@ void Renderer::record(VkCommandBuffer cmd, std::uint32_t slot, const Game& game,
             // Free-standing neon lettering, additive over whatever is behind it.
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, signs_glow_pso_);
             vkCmdDraw(cmd, 6, sign_count_, 0, 0);
+        }
+        if (light_count_) {
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, lights_pso_);
+            vkCmdDraw(cmd, 6, light_count_, 0, 0);
         }
         if (settings_.rain > 0.0f) {
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, rain_pso_);
@@ -866,7 +916,7 @@ void Renderer::record(VkCommandBuffer cmd, std::uint32_t slot, const Game& game,
                                        kAnyFragmentWork, 0, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
                                        VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT});
             const float push[4] = {1.0f / static_cast<float>(src_extent.width),
-                                   1.0f / static_cast<float>(src_extent.height), i == 0 ? 1.0f : 0.0f, 0.8f};
+                                   1.0f / static_cast<float>(src_extent.height), i == 0 ? 1.0f : 0.0f, 0.6f};
             fullscreen_pass(cmd, bloom_[i].view, bloom_[i].extent, bloom_down_pso_, bloom_down_sets_[i], slot, push,
                             sizeof(push), false);
             vk::transition(ctx_, cmd, {bloom_[i].image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
@@ -884,7 +934,7 @@ void Renderer::record(VkCommandBuffer cmd, std::uint32_t slot, const Game& game,
                                        0, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
                                        VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT});
             const float push[4] = {1.0f / static_cast<float>(src.extent.width),
-                                   1.0f / static_cast<float>(src.extent.height), 1.0f, 0.0f};
+                                   1.0f / static_cast<float>(src.extent.height), 1.3f, 0.0f};  // wider tent: hazier glow
             fullscreen_pass(cmd, dst.view, dst.extent, bloom_up_pso_, bloom_up_sets_[static_cast<std::uint32_t>(i)],
                             slot, push, sizeof(push), true);
             vk::transition(ctx_, cmd, {dst.image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,

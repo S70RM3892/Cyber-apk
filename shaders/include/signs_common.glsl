@@ -24,7 +24,7 @@ vec3 neon_glyph(float d, float aa, vec3 col, float intensity, out float coverage
     float core = fill * (0.75 + 0.25 * smoothstep(0.0, 0.04, d));
     float halo = exp(-max(-d, 0.0) * 40.0) * (1.0 - fill);
     coverage = max(fill, halo);
-    vec3 hot = mix(col, vec3(1.0), 0.3);
+    vec3 hot = mix(col, vec3(1.0), 0.15);
     return (hot * core + col * halo * 0.35) * intensity;
 }
 
@@ -151,6 +151,8 @@ void main()
     vec3 plate = vec3(0.012, 0.012, 0.016) + col * 0.03;
 
     if (style == kNeonText) {
+        // Big rooftop lettering is red/pink in 80% of cases, like the target look.
+        if (hash_f(h ^ 0x7eu) < 0.8) col = neon_warm(h);
         float d = text_distance(text, uv.x, uv.y, false);
         float aa = fwidth(d) + 1e-4;
         float cov;
@@ -167,7 +169,7 @@ void main()
         float cellmask = mix(1.0, smoothstep(0.0, 0.15, f.x) * smoothstep(0.0, 0.15, f.y) * 1.3, grid_fade);
         float scan = 0.92 + 0.08 * sin(uv.y * 300.0 - t * 20.0);
         float bezel = step(0.012, min(uv.x, 1.0 - uv.x)) * step(0.008, min(uv.y, 1.0 - uv.y));
-        emissive = img * 1.5 * cellmask * scan * bezel;
+        emissive = img * 2.0 * cellmask * scan * bezel;
     } else if (style == kRooftop) {
         // Animated billboard with a brand line.
         float scanl = 0.5 + 0.5 * sin(uv.y * 40.0 - t * 3.0);
@@ -179,6 +181,7 @@ void main()
         emissive = bg * 1.6 + neon_glyph(d, fwidth(d) + 1e-4, vec3(1.0, 0.95, 0.9), 3.0, cov);
         emissive += border * col * intensity;
     } else if (style == kBlade) {
+        if (hash_f(h ^ 0x7eu) < 0.55) col = neon_warm(h);
         // Vertical Japanese text, one glyph per cell down the blade.
         uint n = max(sign_string_length(text), 1u);
         float inner = 0.35 / (float(n) * 0.92 + 0.35) * 0.5;  // top/bottom margin (see place_signs)

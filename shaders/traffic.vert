@@ -7,6 +7,7 @@
 #include "include/city_common.glsl"
 #include "include/box.glsl"
 #include "include/street_layout.glsl"
+#include "include/highway.glsl"
 
 layout(location = 0) out vec3 out_local;       // box space, [-1,1]^3
 layout(location = 1) out vec3 out_world_pos;
@@ -15,7 +16,8 @@ layout(location = 3) flat out vec3 out_normal_local;
 layout(location = 4) flat out int out_part;  // 0 body, 1 cabin
 
 const float kSpan = 1400.0;      // metres of lane simulated around the camera
-const uint kAirCount = 320u;     // instances [0, kAirCount) fly; the rest drive
+const uint kAirCount = 320u;     // instances [0, kAirCount) fly
+const uint kGroundEnd = 580u;    // [kAirCount, kGroundEnd) drive side streets; the rest the expressways
 const float kGroundSpan = 700.0;
 const uint kPlayerCar = 1u << 20;  // instance id of the player's car (transform from the UBO)
 
@@ -42,7 +44,8 @@ void main()
 
     float t = frame.camera_pos.w;
     vec3 cam = frame.camera_pos.xyz;
-    bool ground = id >= kAirCount;
+    bool ground = id >= kAirCount && id < kGroundEnd;
+    bool expressway = id >= kGroundEnd;
     bool along_x = (id & 1u) == 0u;
     float dir = (hash_u(id ^ 0x3u) & 1u) == 0u ? 1.0 : -1.0;
     float cam_cross = along_x ? cam.y : cam.x;
@@ -65,7 +68,18 @@ void main()
 
     float altitude, speed, lane, span;
     vec3 half_ext;
-    if (ground) {
+    if (expressway) {
+        // Two lanes each way on the nearest expressway lines.
+        int family = along_x ? 1 : 0;  // family 1 runs along x
+        float keep_right = along_x ? -dir : dir;
+        float lane_off = (hash_u(id ^ 0x7u) & 1u) == 0u ? 1.9 : 4.1;
+        altitude = kDeckHeight[family] + 0.72;
+        speed = 18.0 + 12.0 * hash_f(id ^ 0x4u);
+        lane = (floor(cam_cross / kHighwayEvery + 0.5) + float(int(hash_u(id ^ 0x5u) % 5u) - 2)) * kHighwayEvery +
+               keep_right * lane_off;
+        span = kSpan;
+        half_ext = vec3(2.2, 0.92, 0.72);
+    } else if (ground) {
         // Side-street traffic, driving on the right of the centre line.
         altitude = 0.72;
         speed = 7.0 + 7.0 * hash_f(id ^ 0x4u);

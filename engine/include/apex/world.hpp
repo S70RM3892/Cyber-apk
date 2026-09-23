@@ -19,9 +19,10 @@ namespace apex {
 struct BuildingInstance {
     float x, y, footprint, height;  // height = top of this box (metres)
     std::uint32_t seed, district;
-    std::uint32_t flags;             // kTopTier: this box carries the roof of the building
+    std::uint32_t flags;             // kTopTier: this box carries the roof; kShanty: low-rise shack
     float base_z;                    // bottom of this box (metres)
     static constexpr std::uint32_t kTopTier = 1;
+    static constexpr std::uint32_t kShanty = 2;
 };
 static_assert(sizeof(BuildingInstance) == 32);
 
@@ -44,6 +45,30 @@ struct SignInstance {
 };
 static_assert(sizeof(SignInstance) == 32);
 
+// Elevated expressways (see shaders/include/highway.glsl): lines every kHighwayEvery
+// metres along both axes, piers every kHighwaySegment metres in the street median.
+inline constexpr float kHighwayEvery = 480.0f;
+inline constexpr float kHighwaySegment = 32.0f;
+inline constexpr float kHighwayPierHalf = 0.8f;
+
+// Rooftop clutter: AC units, water tanks, antenna masts, lattice frames.
+enum class PropKind : std::uint32_t { AcUnit = 0, WaterTank = 1, Mast = 2, Frame = 3 };
+struct PropInstance {
+    float x, y, z, yaw;       // base centre (z = bottom), heading
+    float sx, sy, sz;         // half extents x/y, full height z (metres)
+    std::uint32_t kind_seed;  // bits 0-7 PropKind, rest seed
+};
+static_assert(sizeof(PropInstance) == 32);
+
+// Small lights that must stay visible at any distance (aviation reds, warning lamps):
+// drawn as additive sprites with a minimum on-screen size.
+struct LightSprite {
+    float x, y, z, size;      // centre, radius (metres)
+    float r, g, b;            // HDR colour
+    float blink;              // 0 = steady, else blink rate (Hz)
+};
+static_assert(sizeof(LightSprite) == 32);
+
 // Distance-to-arterial-road field around the streaming centre. Stored as R8 where
 // value/255 * kRoadFieldRange is the distance in metres (saturating), so bilinear
 // filtering reconstructs smooth road edges at a coarse texel size.
@@ -59,11 +84,16 @@ struct CitySnapshot {
     std::int32_t center_tx = 0, center_ty = 0;
     std::vector<BuildingInstance> buildings;
     std::vector<SignInstance> signs;
+    std::vector<PropInstance> props;
+    std::vector<LightSprite> lights;
     RoadField roads;
 };
 
 // Stack of boxes approximating one building's massing (exposed for tests).
 void add_building_boxes(const city::Building& b, std::vector<BuildingInstance>& out);
+
+// Rooftop props and their lights for one building (exposed for tests).
+void place_props(const city::Building& b, std::vector<PropInstance>& props, std::vector<LightSprite>& lights);
 
 // Deterministic sign placement for one building (exposed for tests).
 void place_signs(const city::Building& b, std::vector<SignInstance>& out);

@@ -11,6 +11,7 @@ struct Building {
     uvec4 seed_district_flags_base;  // w: floatBitsToUint(base z)
 };
 const uint kTopTier = 1u;
+const uint kShanty = 2u;
 
 struct Sign {
     vec4 pos_yaw;       // x, y, z, yaw
@@ -24,6 +25,18 @@ layout(set = 0, binding = 2, std430) readonly buffer Signs { Sign signs[]; };
 layout(set = 0, binding = 3) uniform sampler2D road_field_tex;
 layout(set = 0, binding = 4) uniform sampler2D sign_atlas;          // SDF glyphs, 16 x 9 cells
 layout(set = 0, binding = 5, std430) readonly buffer SignStrings { uvec4 sign_strings[]; };
+
+struct Prop {
+    vec4 pos_yaw;       // base centre, yaw
+    vec3 size;          // half x, half y, full height
+    uint kind_seed;
+};
+struct LightSprite {
+    vec4 pos_size;      // centre, radius
+    vec4 color_blink;   // HDR rgb, blink Hz (0 = steady)
+};
+layout(set = 0, binding = 6, std430) readonly buffer Props { Prop props[]; };
+layout(set = 0, binding = 7, std430) readonly buffer Lights { LightSprite lights[]; };
 
 const vec2 kAtlasCells = vec2(16.0, 9.0);  // signtext::kCols / kRows (static_assert in renderer.cpp)
 const float kGlyphSdfScale = 0.25;         // (2 * kSpread) / kCell: SDF units -> cell units
@@ -63,6 +76,13 @@ float fbm(vec2 p)
         a *= 0.5;
     }
     return s;
+}
+
+// Red / pink family only: the dominant signage colours of the target look.
+vec3 neon_warm(uint h)
+{
+    const vec3 p[4] = vec3[4](vec3(1.0, 0.06, 0.09), vec3(1.0, 0.1, 0.06), vec3(1.0, 0.12, 0.4), vec3(1.0, 0.3, 0.5));
+    return p[h & 3u];
 }
 
 // Neon palette, weighted towards the reds and pinks that dominate the target look,
@@ -120,7 +140,11 @@ vec3 apply_fog(vec3 color, vec3 world_pos)
     vec3 d = world_pos - frame.camera_pos.xyz;
     float amount = fog_amount(world_pos);
     // Teal haze from the sky, warmed by neon close to street level.
-    vec3 in_scatter = sky_color(normalize(d)) * 1.6 + vec3(0.07, 0.012, 0.022) * exp(-max(world_pos.z, 0.0) / 22.0);
+    // Teal-grey smog (the sky's red horizon band is left out: fog shouldn't turn pink),
+    // with a little neon warmth right at street level.
+    vec3 dir = normalize(d);
+    vec3 smog = mix(vec3(0.036, 0.042, 0.046), vec3(0.012, 0.020, 0.025), clamp(dir.z * 2.0, 0.0, 1.0));
+    vec3 in_scatter = smog * 1.6 + vec3(0.03, 0.005, 0.006) * exp(-max(world_pos.z, 0.0) / 15.0);
     return mix(color, in_scatter, amount);
 }
 

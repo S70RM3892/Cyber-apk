@@ -23,7 +23,7 @@ void main()
         vec2 cp = frame.camera_pos.xy + dir.xy * dist;
         float n = fbm(cp * 0.004 + vec2(t * 0.01, t * 0.004));
         float cover = smoothstep(0.35, 0.75, n);
-        vec3 under_lit = mix(vec3(0.13, 0.03, 0.045), vec3(0.04, 0.075, 0.085), value_noise(cp * 0.0015));
+        vec3 under_lit = mix(vec3(0.075, 0.035, 0.04), vec3(0.035, 0.055, 0.06), value_noise(cp * 0.0015));
         float horizon_fade = smoothstep(0.01, 0.25, dir.z);
         // Stars only where the cloud cover is thin.
         vec2 sp = dir.xy / (dir.z + 1.0) * 400.0;
