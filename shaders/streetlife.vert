@@ -57,7 +57,7 @@ void main()
         int j = int(floor(along_coord / kLampSpacing)) + j_off;
         Lamp l = lamp_at(family, i, j, side);
         vec3 inward = vec3(l.inward, 0.0);
-        if (part > 2 || on_arterial(l.base.xy, 1.0)) { gl_Position = degenerate(); return; }
+        if (part > 2 || !l.exists || on_arterial(l.base.xy, 1.0)) { gl_Position = degenerate(); return; }
         if (part == 0) {        // pole
             emit(l.base + vec3(0, 0, kLampHeight * 0.5), vec3(0.08, 0.08, kLampHeight * 0.5), inward, local, nrm, 0u, 0u, 0u);
         } else if (part == 1) { // arm

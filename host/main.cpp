@@ -78,6 +78,9 @@ struct Args {
     bool hud = true;
     bool hud_stick = false;
     bool face_gig = false;
+    float drive_seconds = 0;
+    int traffic = -1;
+    int peds = -1;
 };
 
 Args parse(int argc, char** argv) {
@@ -101,6 +104,9 @@ Args parse(int argc, char** argv) {
         else if (k == "--no-hud") a.hud = false;
         else if (k == "--hud-stick") a.hud_stick = true;
         else if (k == "--face-gig") a.face_gig = true;
+        else if (k == "--drive") a.drive_seconds = std::stof(next());
+        else if (k == "--traffic") a.traffic = std::stoi(next());
+        else if (k == "--peds") a.peds = std::stoi(next());
         else std::fprintf(stderr, "unknown argument %s\n", k.c_str());
     }
     return a;
@@ -170,7 +176,7 @@ int main(int argc, char** argv) {
     Game game(args.seed);
     game.camera().yaw = args.yaw;
     game.camera().pitch = args.pitch;
-    if (args.has_pos) game.camera().position = {args.x, args.y, Game::kEyeHeight};
+    if (args.has_pos) game.set_foot_position({args.x, args.y, 0.0f});
     if (args.face_gig) {
         const Vec3 d = game.gig().target - game.camera().position;
         game.camera().yaw = std::atan2(d.y, d.x);
@@ -180,6 +186,8 @@ int main(int argc, char** argv) {
     RenderSettings settings;
     settings.render_scale = args.scale;
     settings.dynamic_resolution = false;  // deterministic screenshots
+    if (args.traffic >= 0) settings.traffic_count = static_cast<std::uint32_t>(args.traffic);
+    if (args.peds >= 0) settings.pedestrian_count = static_cast<std::uint32_t>(args.peds);
     Renderer renderer(ctx, VK_FORMAT_R8G8B8A8_UNORM, extent, settings);
     HudBuilder hud;
 
@@ -202,10 +210,16 @@ int main(int argc, char** argv) {
 
     const OutputTarget target{output.image, output.view, output.format, extent, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL};
     const float dt = 1.0f / 30.0f;
+    const int frames = args.drive_seconds > 0.0f ? std::max(args.frames, static_cast<int>(args.drive_seconds / dt) + 3)
+                                                 : args.frames;
     double gpu_ms = 0;
-    for (int frame = 0; frame < args.frames; ++frame) {
+    for (int frame = 0; frame < frames; ++frame) {
         Input in;
         if (game.time() < args.walk_seconds) in.move_y = 1.0f;
+        if (args.drive_seconds > 0.0f) {
+            in.toggle_car = frame == 0;
+            in.move_y = game.time() < args.drive_seconds ? 1.0f : 0.0f;
+        }
         game.update(dt, in);
         if (game.take_world_dirty()) renderer.upload_world(*game.world().snapshot());
 
@@ -225,7 +239,7 @@ int main(int argc, char** argv) {
         if (args.hud) build_hud(hud, game, hi);
         renderer.record(cmd, static_cast<std::uint32_t>(frame) % Renderer::kFramesInFlight, game, target,
                         args.hud ? std::span<const HudQuad>(hud.quads()) : std::span<const HudQuad>{});
-        if (frame == args.frames - 1) {
+        if (frame == frames - 1) {
             VkBufferImageCopy copy{};
             copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
             copy.imageExtent = {extent.width, extent.height, 1};
@@ -252,7 +266,7 @@ int main(int argc, char** argv) {
     const Vec3 p = game.camera().position;
     std::printf("frames=%d avg_frame_ms=%.1f (cpu-emulated GPU) buildings=%zu signs=%zu pos=(%.1f, %.1f) "
                 "mean_luma=%.1f bright_px=%.2f%%\n",
-                args.frames, gpu_ms / args.frames, game.world().snapshot()->buildings.size(),
+                frames, gpu_ms / frames, game.world().snapshot()->buildings.size(),
                 game.world().snapshot()->signs.size(), p.x, p.y, sum / static_cast<double>(n),
                 100.0 * static_cast<double>(bright) / static_cast<double>(n));
 

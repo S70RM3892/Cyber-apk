@@ -38,6 +38,7 @@ struct HudInput {
     float render_scale = 1;
     StickState stick;
     bool jump_held = false;
+    bool car_held = false;
 };
 
 class HudBuilder {
@@ -64,6 +65,7 @@ struct HudButton {
     }
 };
 HudButton jump_button(float width, float height);
+HudButton car_button(float width, float height);
 
 // Lay out the game HUD (status panel, compass, gig tracker, crosshair, controls).
 void build_hud(HudBuilder& hud, const Game& game, const HudInput& in);

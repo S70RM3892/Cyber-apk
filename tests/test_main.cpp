@@ -217,9 +217,9 @@ void test_collision() {
     for (int i = 0; i < 600; ++i) {
         in.look_dx = (i % 120 == 0) ? 0.9f : 0.0f;  // turn now and then to hit walls at angles
         game.update(1.0f / 30.0f, in);
-        const Vec3 pos = game.camera().position;
+        const Vec3 pos = game.player_position();
         for (const BuildingInstance& b : game.world().snapshot()->buildings) {
-            if (b.base_z > pos.z || b.height < pos.z) continue;
+            if (b.base_z > 1.0f || b.height < 1.0f) continue;
             const float half = b.footprint * 0.5f;
             const bool inside = std::fabs(pos.x - b.x) < half && std::fabs(pos.y - b.y) < half;
             CHECK(!inside);
@@ -242,7 +242,7 @@ void test_gigs() {
     Input idle;
     game.update(0.016f, idle);
     CHECK(game.credits() == 0);
-    game.camera().position = {first.target.x, first.target.y, Game::kEyeHeight};
+    game.set_foot_position(first.target);
     game.update(0.016f, idle);
     CHECK(game.gigs_completed() == 1);
     CHECK(game.credits() >= static_cast<std::uint32_t>(first.reward * 0.99f));  // on time: full pay
@@ -267,6 +267,43 @@ void test_jump() {
     CHECK(near(game.camera().position.z, Game::kEyeHeight));
 }
 
+void test_driving() {
+    Game game(2077);
+    Input in;
+    in.toggle_car = true;
+    game.update(1.0f / 60.0f, in);
+    CHECK(game.mode() == PlayerMode::Driving);
+    CHECK(game.car().spawned);
+    in.toggle_car = false;
+    in.move_y = 1.0f;
+    float top = 0.0f;
+    for (int i = 0; i < 60 * 6; ++i) {
+        in.move_x = (i / 90) % 2 ? 0.4f : -0.3f;  // weave so we hit walls at angles
+        game.update(1.0f / 60.0f, in);
+        top = std::max(top, game.car().speed);
+        const Vec3 c = game.car().position;
+        for (const BuildingInstance& b : game.world().snapshot()->buildings) {
+            if (b.base_z > 1.0f) continue;
+            const float half = b.footprint * 0.5f;
+            CHECK(!(std::fabs(c.x - b.x) < half && std::fabs(c.y - b.y) < half));
+        }
+    }
+    CHECK(top > 15.0f && top <= Car::kMaxSpeed);
+    // Braking: full reverse input brings the car to a stop, then reverses slowly.
+    in.move_x = 0.0f;
+    in.move_y = -1.0f;
+    for (int i = 0; i < 60 * 4; ++i) game.update(1.0f / 60.0f, in);
+    CHECK(game.car().speed < 0.0f && game.car().speed >= -Car::kReverseSpeed);
+    // Exit: on foot, next to the car.
+    in = {};
+    in.toggle_car = true;
+    game.update(1.0f / 60.0f, in);
+    CHECK(game.mode() == PlayerMode::OnFoot);
+    const Vec3 f = game.player_position(), c = game.car().position;
+    CHECK(std::hypot(f.x - c.x, f.y - c.y) < 4.0f);
+    game.world().wait_ready();
+}
+
 }  // namespace
 
 int main() {
@@ -282,6 +319,7 @@ int main() {
     test_collision();
     test_gigs();
     test_jump();
+    test_driving();
     if (g_failures == 0) std::puts("all tests passed");
     return g_failures == 0 ? 0 : 1;
 }

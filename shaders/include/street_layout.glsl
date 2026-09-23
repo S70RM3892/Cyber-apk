@@ -19,6 +19,7 @@ struct Lamp {
     vec2 inward;    // unit vector from pole towards the road centre
     vec3 color;
     float on;
+    bool exists;
 };
 
 // Lamp j on grid line i. family 0: line x = i*kBlock (street along y);
@@ -36,6 +37,11 @@ Lamp lamp_at(int family, int i, int j, int side)
     uint h = hash_u3(uvec3(uint(i + 65536), uint(j + 65536), uint(family * 2 + (side > 0 ? 1 : 0))));
     l.color = hash_f(h) < 0.6 ? vec3(1.0, 0.55, 0.22) : vec3(0.55, 0.78, 1.0);
     l.on = step(0.1, hash_f(h ^ 0x55u));
+    // No lamps inside a crossing street (intersections): distance to the nearest grid
+    // line along the street must clear the crossing corridor.
+    float m = mod(along, kBlock);
+    l.exists = min(m, kBlock - m) > kCorridorHalf + 0.5;
+    if (!l.exists) l.on = 0.0;
     return l;
 }
 

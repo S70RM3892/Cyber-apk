@@ -100,6 +100,12 @@ HudButton jump_button(float width, float height) {
     return {width - 24.0f * u - 90.0f * u, height - 24.0f * u - 150.0f * u, 56.0f * u};
 }
 
+HudButton car_button(float width, float height) {
+    const HudButton j = jump_button(width, height);
+    const float u = height / 720.0f;
+    return {j.cx - 20.0f * u, j.cy - 140.0f * u, 44.0f * u};
+}
+
 void build_hud(HudBuilder& hud, const Game& game, const HudInput& in) {
     hud.clear();
     // Scale everything from a 720p-tall reference so the HUD is the same physical size
@@ -195,8 +201,35 @@ void build_hud(HudBuilder& hud, const Game& game, const HudInput& in) {
     // ---- Crosshair ----
     hud.ring(in.width * 0.5f, in.height * 0.5f, 5 * u, 0.35f, 1.0f, 1.0f, 1.0f, 0.7f);
 
-    // ---- Jump button ----
+    const bool driving = game.mode() == PlayerMode::Driving;
+
+    // ---- Car button (summon / exit) ----
     {
+        const HudButton cb = car_button(in.width, in.height);
+        const float a = in.car_held ? 0.55f : 0.25f;
+        hud.ring(cb.cx, cb.cy, cb.radius, 0.08f, kCyan[0], kCyan[1], kCyan[2], a + 0.2f);
+        if (in.car_held) hud.ring(cb.cx, cb.cy, cb.radius * 0.9f, 0.0f, kCyan[0], kCyan[1], kCyan[2], 0.25f);
+        const char* label = driving ? "EXIT" : "CAR";
+        hud.text(label, cb.cx - HudBuilder::text_width(label, px * 0.9f) * 0.5f, cb.cy - 3.5f * px * 0.9f, px * 0.9f,
+                 1.0f, 1.0f, 1.0f, 0.7f);
+    }
+
+    // ---- Speedometer (driving) ----
+    if (driving) {
+        std::snprintf(line, sizeof line, "%3.0f", static_cast<double>(std::fabs(game.car().speed) * 3.6f));
+        const float big = px * 2.6f;
+        const float w = HudBuilder::text_width(line, big);
+        const float sx = in.width * 0.5f - w * 0.5f, sy = in.height - margin - 7 * big - 18 * u;
+        hud.text(line, sx, sy, big, kCyan[0], kCyan[1], kCyan[2], 0.95f);
+        hud.text("KM/H", in.width * 0.5f - HudBuilder::text_width("KM/H", px * 0.8f) * 0.5f, sy + 7 * big + 6 * u,
+                 px * 0.8f, 0.8f, 0.9f, 1.0f, 0.8f);
+        const float frac = std::clamp(std::fabs(game.car().speed) / Car::kMaxSpeed, 0.0f, 1.0f);
+        hud.rect(in.width * 0.5f - 120 * u, sy - 12 * u, 240 * u, 4 * u, 1.0f, 1.0f, 1.0f, 0.15f);
+        hud.rect(in.width * 0.5f - 120 * u, sy - 12 * u, 240 * u * frac, 4 * u, kPink[0], kPink[1], kPink[2], 0.9f);
+    }
+
+    // ---- Jump button (on foot) ----
+    if (!driving) {
         const HudButton jb = jump_button(in.width, in.height);
         const float a = in.jump_held ? 0.55f : 0.25f;
         hud.ring(jb.cx, jb.cy, jb.radius, 0.08f, kPink[0], kPink[1], kPink[2], a + 0.2f);
@@ -215,7 +248,8 @@ void build_hud(HudBuilder& hud, const Game& game, const HudInput& in) {
         // Hint where the stick lives.
         const float r = 70.0f * u;
         hud.ring(margin + 110 * u, in.height - margin - 110 * u, r, 0.05f, 1.0f, 1.0f, 1.0f, 0.18f);
-        hud.text("MOVE", margin + 110 * u - HudBuilder::text_width("MOVE", px * 0.8f) * 0.5f,
+        const char* stick_label = driving ? "DRIVE" : "MOVE";
+        hud.text(stick_label, margin + 110 * u - HudBuilder::text_width(stick_label, px * 0.8f) * 0.5f,
                  in.height - margin - 116 * u, px * 0.8f, 1.0f, 1.0f, 1.0f, 0.35f);
         hud.text("DRAG TO LOOK", in.width - margin - HudBuilder::text_width("DRAG TO LOOK", px * 0.8f),
                  in.height - margin - 20 * u, px * 0.8f, 1.0f, 1.0f, 1.0f, 0.3f);

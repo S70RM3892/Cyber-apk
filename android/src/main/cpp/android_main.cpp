@@ -2,8 +2,9 @@
 //
 // Controls (landscape):
 //   left half   floating virtual stick: walk; push to the rim to sprint
-//   right half  drag to look around; JUMP button bottom-right
-//   keyboard    WASD + Shift, arrow keys to look (emulators / Chromebooks)
+//   right half  drag to look around; JUMP and CAR (summon / exit) buttons bottom-right
+//   driving     stick y = throttle / brake / reverse, stick x = steer
+//   keyboard    WASD + Shift, arrows to look, Space jump, F car (emulators / Chromebooks)
 #include <android/input.h>
 #include <android/keycodes.h>
 #include <android/log.h>
@@ -43,7 +44,10 @@ public:
             case AMOTION_EVENT_ACTION_POINTER_DOWN: {
                 const int32_t id = AMotionEvent_getPointerId(e, index);
                 const float x = AMotionEvent_getX(e, index), y = AMotionEvent_getY(e, index);
-                if (jump_button(width_, height_).contains(x, y)) {
+                if (car_button(width_, height_).contains(x, y)) {
+                    car_id_ = id;
+                    car_pending_ = true;
+                } else if (jump_button(width_, height_).contains(x, y)) {
                     jump_id_ = id;
                     jump_pending_ = true;
                 } else if (x < width_ * 0.5f && stick_id_ < 0) {
@@ -95,6 +99,7 @@ public:
                 }
                 if (id == look_id_ || id == -2) look_id_ = -1;
                 if (id == jump_id_ || id == -2) jump_id_ = -1;
+                if (id == car_id_ || id == -2) car_id_ = -1;
                 return true;
             }
             default:
@@ -115,6 +120,9 @@ public:
             case AKEYCODE_DPAD_DOWN: keys_[7] = down; return true;
             case AKEYCODE_SHIFT_LEFT:
             case AKEYCODE_SHIFT_RIGHT: keys_[8] = down; return true;
+            case AKEYCODE_F:
+                if (down && AKeyEvent_getRepeatCount(e) == 0) car_pending_ = true;
+                return true;
             case AKEYCODE_SPACE:
                 if (down && AKeyEvent_getRepeatCount(e) == 0) jump_pending_ = true;
                 return true;
@@ -135,6 +143,8 @@ public:
         look_dx_ = look_dy_ = 0.0f;
         in.jump = jump_pending_;
         jump_pending_ = false;
+        in.toggle_car = car_pending_;
+        car_pending_ = false;
         return in;
     }
 
@@ -142,11 +152,12 @@ public:
         return {stick_id_ >= 0, stick_origin_x_, stick_origin_y_, stick_x_, stick_y_, height_ * 0.12f};
     }
     bool jump_held() const { return jump_id_ >= 0; }
+    bool car_held() const { return car_id_ >= 0; }
 
 private:
     float width_ = 1, height_ = 1;
-    int32_t stick_id_ = -1, look_id_ = -1, jump_id_ = -1;
-    bool jump_pending_ = false;
+    int32_t stick_id_ = -1, look_id_ = -1, jump_id_ = -1, car_id_ = -1;
+    bool jump_pending_ = false, car_pending_ = false;
     float stick_origin_x_ = 0, stick_origin_y_ = 0, stick_x_ = 0, stick_y_ = 0;
     float look_last_x_ = 0, look_last_y_ = 0, look_dx_ = 0, look_dy_ = 0;
     bool sprint_ = false;
@@ -234,6 +245,7 @@ public:
         hi.render_scale = renderer_->settings().render_scale;
         hi.stick = controls_.stick();
         hi.jump_held = controls_.jump_held();
+        hi.car_held = controls_.car_held();
         build_hud(hud_, *game_, hi);
 
         if (presenter_->frame(*game_, *renderer_, world_dirty_, hud_.quads())) world_dirty_ = false;

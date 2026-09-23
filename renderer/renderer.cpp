@@ -21,12 +21,14 @@ struct FrameUniforms {
     float viewport[4];
     float fog[4];
     float objective[4];
+    float player_car[4];
 };
-static_assert(sizeof(FrameUniforms) == 336);
+static_assert(sizeof(FrameUniforms) == 352);
 
 constexpr VkFormat kSceneColorFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
 constexpr VkFormat kMaterialFormat = VK_FORMAT_R8G8B8A8_UNORM;
 constexpr VkFormat kDepthFormat = VK_FORMAT_D32_SFLOAT;
+constexpr std::uint32_t kPlayerCarInstance = 1u << 20;  // traffic.vert kPlayerCar
 
 // Inverse of an invertible 4x4 (cofactor expansion). Only used once per frame.
 Mat4 inverse(const Mat4& a) {
@@ -633,6 +635,11 @@ void Renderer::update_frame_ubo(std::uint32_t slot, const Game& game) {
     u.objective[1] = gig.target.y;
     u.objective[2] = gig.elapsed;
     u.objective[3] = 1.0f;
+    const Car& car = game.car();
+    u.player_car[0] = car.position.x;
+    u.player_car[1] = car.position.y;
+    u.player_car[2] = car.yaw;
+    u.player_car[3] = car.spawned ? 1.0f : 0.0f;
     std::memcpy(static_cast<char*>(frame_ubo_.mapped) + slot * ubo_stride_, &u, sizeof(u));
 }
 
@@ -725,10 +732,10 @@ void Renderer::record(VkCommandBuffer cmd, std::uint32_t slot, const Game& game,
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, buildings_pso_);
             vkCmdDraw(cmd, 30, building_count_, 0, 0);
         }
-        if (settings_.traffic_count) {
-            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, traffic_pso_);
-            vkCmdDraw(cmd, 36, settings_.traffic_count, 0, 0);
-        }
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, traffic_pso_);
+        // Two boxes per vehicle: body + cabin.
+        if (settings_.traffic_count) vkCmdDraw(cmd, 72, settings_.traffic_count, 0, 0);
+        if (game.car().spawned) vkCmdDraw(cmd, 72, 1, 0, kPlayerCarInstance);
         {
             // Lamp posts (3 boxes each) then pedestrians (6 boxes each); see streetlife.vert.
             constexpr std::uint32_t kLampCount = 2 * 9 * 2 * 20;

@@ -1,4 +1,5 @@
-// Platform-independent game state: player controller, camera, clock.
+// Platform-independent game state: player controller (on foot / driving), camera,
+// gigs, clock.
 #pragma once
 
 #include "apex/mat.hpp"
@@ -8,10 +9,11 @@ namespace apex {
 
 // Per-frame input, already mapped from touch / keyboard by the platform layer.
 struct Input {
-    float move_x = 0, move_y = 0;  // stick, [-1, 1]; +y = forward, +x = strafe right
+    float move_x = 0, move_y = 0;    // stick, [-1, 1]; +y = forward/throttle, +x = right/steer
     float look_dx = 0, look_dy = 0;  // radians this frame
     bool sprint = false;
-    bool jump = false;  // edge-triggered: true for the frame the button was pressed
+    bool jump = false;        // edge-triggered: true for the frame the button was pressed
+    bool toggle_car = false;  // edge-triggered: summon + enter, or exit
 };
 
 // A courier job: reach the beacon before the clock runs down. Reward decays with time.
@@ -22,6 +24,23 @@ struct Gig {
     float elapsed = 0;         // seconds since the gig was issued
     float par_time = 0;        // seconds for full reward
 };
+
+// The player's car: arcade handling, collides with buildings as a circle.
+struct Car {
+    Vec3 position;       // ground contact point (z = 0)
+    float yaw = 0;       // heading, same convention as Camera::yaw
+    float speed = 0;     // m/s along the heading (negative = reversing)
+    bool spawned = false;
+
+    static constexpr float kMaxSpeed = 38.0f;    // ~137 km/h
+    static constexpr float kReverseSpeed = 9.0f;
+    static constexpr float kAccel = 11.0f;
+    static constexpr float kBrake = 22.0f;
+    static constexpr float kDrag = 0.35f;        // 1/s at full speed (quadratic-ish feel)
+    static constexpr float kRadius = 1.3f;
+};
+
+enum class PlayerMode { OnFoot, Driving };
 
 struct Camera {
     Vec3 position;
@@ -48,10 +67,21 @@ public:
     const Gig& gig() const { return gig_; }
     std::uint32_t credits() const { return credits_; }
     std::uint32_t gigs_completed() const { return completed_; }
-    // Seconds since the last gig was completed (for the HUD's payout flash); large if never.
+    // Seconds since the last gig was completed (for the HUD's payout flash).
     float since_payout() const { return time_ - last_payout_time_; }
     std::uint32_t last_payout() const { return last_payout_; }
     bool on_ground() const { return on_ground_; }
+    PlayerMode mode() const { return mode_; }
+    const Car& car() const { return car_; }
+    // The player's ground position (feet), whichever mode they're in.
+    Vec3 player_position() const;
+    // Move the player on foot (tests / debug teleports).
+    void set_foot_position(Vec3 p) {
+        foot_position_ = {p.x, p.y, 0.0f};
+        camera_.position = {p.x, p.y, kEyeHeight + height_};
+    }
+    // Horizontal speed of the player (on foot or in the car), m/s.
+    float player_speed() const { return player_speed_; }
 
     // True once when the streamed city changed and GPU buffers must be refreshed.
     bool take_world_dirty() {
@@ -67,6 +97,7 @@ public:
     static constexpr float kJumpSpeed = 6.0f;
     static constexpr float kGravity = 16.0f;  // snappier than 9.81 for a game feel
     static constexpr float kGigRadius = 5.0f;
+    static constexpr float kGigRadiusDriving = 9.0f;
 
 private:
     std::uint64_t seed_;
@@ -79,8 +110,16 @@ private:
     float last_payout_time_ = -1000.0f;
     float height_ = 0.0f, vz_ = 0.0f;  // feet above the ground, vertical velocity
     bool on_ground_ = true;
+    PlayerMode mode_ = PlayerMode::OnFoot;
+    Car car_;
+    Vec3 foot_position_;           // feet position while on foot
+    float chase_yaw_offset_ = 0;   // driving: camera orbit relative to the car heading
+    float player_speed_ = 0;
 
     void issue_gig();
+    void update_on_foot(float dt, const Input& in);
+    void update_driving(float dt, const Input& in);
+    void toggle_car();
 };
 
 }  // namespace apex

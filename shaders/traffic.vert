@@ -12,16 +12,33 @@ layout(location = 0) out vec3 out_local;       // box space, [-1,1]^3
 layout(location = 1) out vec3 out_world_pos;
 layout(location = 2) flat out uint out_id;
 layout(location = 3) flat out vec3 out_normal_local;
+layout(location = 4) flat out int out_part;  // 0 body, 1 cabin
 
 const float kSpan = 1400.0;      // metres of lane simulated around the camera
 const uint kAirCount = 320u;     // instances [0, kAirCount) fly; the rest drive
 const float kGroundSpan = 700.0;
+const uint kPlayerCar = 1u << 20;  // instance id of the player's car (transform from the UBO)
+
+// Split the vehicle's bounding box into a low body and a cabin set back on top.
+void shape_part(int part, inout vec3 center, inout vec3 half_ext, vec3 fwd)
+{
+    float h = half_ext.z;
+    if (part == 0) {
+        center.z -= h * 0.3;
+        half_ext.z = h * 0.7;
+    } else {
+        center += fwd * (-0.2 * half_ext.x) + vec3(0, 0, h * 0.75);
+        half_ext = vec3(half_ext.x * 0.52, half_ext.y * 0.86, h * 0.42);
+    }
+}
 
 void main()
 {
     uint id = uint(gl_InstanceIndex);
     vec3 normal_local;
-    vec3 local = box_vertex(gl_VertexIndex, normal_local);
+    vec3 local = box_vertex(gl_VertexIndex % 36, normal_local);
+    int part = gl_VertexIndex / 36;
+    out_part = part;
 
     float t = frame.camera_pos.w;
     vec3 cam = frame.camera_pos.xyz;
@@ -30,6 +47,21 @@ void main()
     float dir = (hash_u(id ^ 0x3u) & 1u) == 0u ? 1.0 : -1.0;
     float cam_cross = along_x ? cam.y : cam.x;
     float cam_along = along_x ? cam.x : cam.y;
+
+    if (id == kPlayerCar) {
+        vec3 fwd = vec3(cos(frame.player_car.z), sin(frame.player_car.z), 0.0);
+        vec3 side = vec3(-fwd.y, fwd.x, 0.0);
+        vec3 half_ext = vec3(2.3, 0.98, 0.68);
+        vec3 center = vec3(frame.player_car.xy, 0.7);
+        shape_part(part, center, half_ext, fwd);
+        vec3 world = center + fwd * local.x * half_ext.x + side * local.y * half_ext.y + vec3(0, 0, local.z * half_ext.z);
+        out_local = local;
+        out_world_pos = world;
+        out_id = id;
+        out_normal_local = normal_local;
+        gl_Position = frame.view_proj * vec4(world, 1.0);
+        return;
+    }
 
     float altitude, speed, lane, span;
     vec3 half_ext;
@@ -56,6 +88,7 @@ void main()
     vec3 center = along_x ? vec3(along, lane, altitude) : vec3(lane, along, altitude);
     vec3 fwd = along_x ? vec3(dir, 0, 0) : vec3(0, dir, 0);
     vec3 side = vec3(-fwd.y, fwd.x, 0);
+    shape_part(part, center, half_ext, fwd);
     vec3 world = center + fwd * local.x * half_ext.x + side * local.y * half_ext.y + vec3(0, 0, 1) * local.z * half_ext.z;
 
     out_local = local;
