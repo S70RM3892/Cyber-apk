@@ -471,6 +471,24 @@ std::shared_ptr<const CitySnapshot> build_snapshot(const city::Params& p, std::i
 
     for (const SignInstance& s : snap->signs) snap->point_lights.push_back(sign_light(s));
 
+    // Cables between low buildings in the full-detail area: one extra chunk.
+    {
+        std::vector<CableAnchor> anchors;
+        for (std::uint32_t i = 0; i < snap->buildings.size(); ++i) {
+            const BuildingInstance& bi = snap->buildings[i];
+            if (bi.base_z > 0.5f || bi.height > 40.0f) continue;  // ground tier of low-rise only
+            if (std::hypot(bi.x - cx, bi.y - cy) > detail_radius * 0.8f) continue;
+            anchors.push_back({bi.x, bi.y, bi.footprint, bi.height, i});
+        }
+        MeshChunk chunk;
+        chunk.first_index = static_cast<std::uint32_t>(mesh.indices.size());
+        build_cables(anchors, mesh);
+        chunk.index_count = static_cast<std::uint32_t>(mesh.indices.size()) - chunk.first_index;
+        chunk.min[0] = cx - detail_radius; chunk.min[1] = cy - detail_radius; chunk.min[2] = 0.0f;
+        chunk.max[0] = cx + detail_radius; chunk.max[1] = cy + detail_radius; chunk.max[2] = 50.0f;
+        if (chunk.index_count) mesh.chunks.push_back(chunk);
+    }
+
     RoadField& rf = snap->roads;
     const float extent = static_cast<float>(2 * radius + 1) * tile_size;
     snap->light_grid = build_light_grid(snap->point_lights, static_cast<float>(ctx - radius) * tile_size,

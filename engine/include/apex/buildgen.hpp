@@ -27,6 +27,14 @@ enum class MeshDetail { Full, Massing };
 void build_building_mesh(const city::Building& b, std::uint32_t building_index, std::span<const SignInstance> signs,
                          MeshDetail detail, CityMesh& out, std::vector<PointLight>& lights);
 
+// Overhead power / data cables strung between neighbouring low-rise buildings, sagging
+// across streets and alleys (the wire tangle of the target look).
+struct CableAnchor {
+    float x, y, footprint, height;
+    std::uint32_t building_index;
+};
+void build_cables(std::span<const CableAnchor> anchors, CityMesh& out);
+
 // Mirrors of the shader palettes in shaders/include/city_common.glsl.
 struct Rgb {
     float r, g, b;

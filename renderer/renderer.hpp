@@ -17,12 +17,13 @@
 namespace apex {
 
 struct RenderSettings {
-    float render_scale = 0.67f;  // internal resolution relative to output (spec §4.3 DRS range)
+    float render_scale = 0.75f;  // internal resolution relative to output (spec §4.3 DRS range)
     // Dynamic resolution: steer render_scale within [min, max] to keep GPU time under
-    // the budget. 0.5 of 1080p = 540p, the floor of the spec's DRS range.
+    // the budget. 0.5 of 1080p = 540p, the floor of the spec's DRS range; on devices with
+    // headroom it climbs to native.
     bool dynamic_resolution = true;
-    float min_scale = 0.5f, max_scale = 0.75f;
-    float gpu_budget_ms = 13.0f;  // leaves headroom inside a 16.6 ms vsync interval
+    float min_scale = 0.5f, max_scale = 1.0f;
+    float gpu_budget_ms = 7.5f;  // holds a 120 Hz display (8.3 ms vsync) where the GPU allows
     int ssr_steps = 24;
     float exposure = 1.8f;
     float bloom_strength = 1.7f;

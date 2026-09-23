@@ -762,4 +762,57 @@ void build_building_mesh(const city::Building& b, std::uint32_t building_index, 
     }
 }
 
+void build_cables(std::span<const CableAnchor> anchors, CityMesh& out) {
+    // Bucket anchors on a 30 m grid so each building only looks at its neighbours.
+    constexpr float kCell = 30.0f, kMaxSpan = 48.0f;
+    auto key = [](int x, int y) { return (static_cast<std::uint64_t>(static_cast<std::uint32_t>(x)) << 32) | static_cast<std::uint32_t>(y); };
+    std::vector<std::pair<std::uint64_t, std::uint32_t>> grid;
+    for (std::uint32_t i = 0; i < anchors.size(); ++i)
+        grid.push_back({key(static_cast<int>(std::floor(anchors[i].x / kCell)), static_cast<int>(std::floor(anchors[i].y / kCell))), i});
+    std::sort(grid.begin(), grid.end());
+    std::vector<PointLight> no_lights;
+    for (std::uint32_t i = 0; i < anchors.size(); ++i) {
+        const CableAnchor& a = anchors[i];
+        const int cx = static_cast<int>(std::floor(a.x / kCell)), cy = static_cast<int>(std::floor(a.y / kCell));
+        Builder g(out, a.building_index, {}, no_lights);
+        for (int dy = -2; dy <= 2; ++dy)
+            for (int dx = -2; dx <= 2; ++dx) {
+                auto it = std::lower_bound(grid.begin(), grid.end(), std::pair{key(cx + dx, cy + dy), 0u});
+                for (; it != grid.end() && it->first == key(cx + dx, cy + dy); ++it) {
+                    const std::uint32_t j = it->second;
+                    if (j <= i) continue;  // each pair once
+                    const CableAnchor& b = anchors[j];
+                    const V2 d{b.x - a.x, b.y - a.y};
+                    const float dist = len(d);
+                    if (dist < 8.0f || dist > kMaxSpan) continue;
+                    Rng rng{city::hash64(city::hash64(static_cast<std::uint64_t>(std::lround(a.x * 7 + a.y * 13))) ^
+                                         static_cast<std::uint64_t>(std::lround(b.x * 11 + b.y * 5)))};
+                    if (!rng.chance(0.45f)) continue;
+                    const V2 dir = d * (1.0f / dist), side{-dir.y, dir.x};
+                    // Leave from the facing walls, below the lower roof.
+                    const float top = std::min({a.height, b.height, 16.0f});
+                    const int wires = 1 + rng.index(4);
+                    const float z0 = rng.range(std::max(3.5f, top - 4.0f), top - 0.3f);
+                    const float off = rng.range(-0.3f, 0.3f) * std::min(a.footprint, b.footprint);
+                    for (int w = 0; w < wires; ++w) {
+                        const float lat = off + static_cast<float>(w) * rng.range(0.2f, 0.6f);
+                        const V2 pa = V2{a.x, a.y} + dir * (a.footprint * 0.5f) + side * lat;
+                        const V2 pb = V2{b.x, b.y} - dir * (b.footprint * 0.5f) + side * (lat + rng.range(-1.0f, 1.0f));
+                        const float za = z0 + rng.range(-0.4f, 0.4f), zb = z0 + rng.range(-0.8f, 0.8f);
+                        const float sag = len(pb - pa) * rng.range(0.03f, 0.08f);
+                        constexpr int kSegs = 8;
+                        Vec3 prev = at(pa, za);
+                        for (int k = 1; k <= kSegs; ++k) {
+                            const float t = static_cast<float>(k) / kSegs;
+                            const V2 p = pa + (pb - pa) * t;
+                            const Vec3 cur = at(p, za + (zb - za) * t - 4.0f * sag * t * (1.0f - t));
+                            g.beam(prev, cur, 0.05f, M::Metal, 3);
+                            prev = cur;
+                        }
+                    }
+                }
+            }
+    }
+}
+
 }  // namespace apex
