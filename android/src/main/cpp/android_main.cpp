@@ -5,6 +5,7 @@
 //   right half  drag to look around; JUMP and CAR (summon / exit) buttons bottom-right
 //   driving     stick y = throttle / brake / reverse, stick x = steer
 //   keyboard    WASD + Shift, arrows to look, Space jump, F car (emulators / Chromebooks)
+#include <aaudio/AAudio.h>
 #include <android/input.h>
 #include <android/keycodes.h>
 #include <android/log.h>
@@ -12,10 +13,12 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <memory>
 
+#include "apex/audio.hpp"
 #include "apex/game.hpp"
 #include "apex/hud.hpp"
 #include "presenter.hpp"
@@ -164,6 +167,77 @@ private:
     std::array<bool, 9> keys_{};
 };
 
+// ---- Audio (AAudio) ---------------------------------------------------------------------
+
+// Plays the procedural Synth through an AAudio callback stream. Disconnects (e.g.
+// headphones unplugged) are reported on AAudio's thread; the stream is reopened from
+// the main loop, as AAudio requires.
+class AudioOut {
+public:
+    ~AudioOut() { close(); }
+
+    void open() {
+        AAudioStreamBuilder* b = nullptr;
+        if (AAudio_createStreamBuilder(&b) != AAUDIO_OK) return;
+        AAudioStreamBuilder_setFormat(b, AAUDIO_FORMAT_PCM_FLOAT);
+        AAudioStreamBuilder_setChannelCount(b, 2);
+        AAudioStreamBuilder_setPerformanceMode(b, AAUDIO_PERFORMANCE_MODE_POWER_SAVING);
+        AAudioStreamBuilder_setUsage(b, AAUDIO_USAGE_GAME);
+        AAudioStreamBuilder_setContentType(b, AAUDIO_CONTENT_TYPE_MUSIC);
+        AAudioStreamBuilder_setDataCallback(b, &AudioOut::on_data, this);
+        AAudioStreamBuilder_setErrorCallback(b, &AudioOut::on_error, this);
+        const aaudio_result_t r = AAudioStreamBuilder_openStream(b, &stream_);
+        AAudioStreamBuilder_delete(b);
+        if (r != AAUDIO_OK) {
+            APEX_LOGW("AAudio open failed: %s", AAudio_convertResultToText(r));
+            stream_ = nullptr;
+            return;
+        }
+        synth_ = std::make_unique<Synth>(static_cast<float>(AAudioStream_getSampleRate(stream_)));
+        synth_->set_state(state_);
+        AAudioStream_requestStart(stream_);
+    }
+
+    void close() {
+        if (!stream_) return;
+        AAudioStream_requestStop(stream_);
+        AAudioStream_close(stream_);
+        stream_ = nullptr;
+    }
+
+    void pause() {
+        if (stream_) AAudioStream_requestPause(stream_);
+    }
+    void resume() {
+        if (stream_) AAudioStream_requestStart(stream_);
+    }
+
+    // Main-thread housekeeping + state update.
+    void update(const AudioState& s) {
+        state_ = s;
+        if (restart_.exchange(false)) {
+            close();
+            open();
+        }
+        if (synth_) synth_->set_state(s);
+    }
+
+private:
+    AAudioStream* stream_ = nullptr;
+    std::unique_ptr<Synth> synth_;
+    AudioState state_;
+    std::atomic<bool> restart_{false};
+
+    static aaudio_data_callback_result_t on_data(AAudioStream*, void* user, void* audio, int32_t frames) {
+        auto* self = static_cast<AudioOut*>(user);
+        self->synth_->render(static_cast<float*>(audio), frames);
+        return AAUDIO_CALLBACK_RESULT_CONTINUE;
+    }
+    static void on_error(AAudioStream*, void* user, aaudio_result_t err) {
+        if (err == AAUDIO_ERROR_DISCONNECTED) static_cast<AudioOut*>(user)->restart_ = true;
+    }
+};
+
 // ---- App ----------------------------------------------------------------------------
 
 class App {
@@ -201,6 +275,10 @@ public:
         controls_.set_screen(static_cast<float>(extent.width), static_cast<float>(extent.height));
 
         if (!game_) game_ = std::make_unique<Game>(2077);
+        if (!audio_started_) {
+            audio_.open();
+            audio_started_ = true;
+        }
         if (!renderer_) {
             renderer_ = std::make_unique<Renderer>(*ctx_, format, extent, RenderSettings{});
             world_dirty_ = true;
@@ -217,6 +295,8 @@ public:
     bool can_render() const { return presenter_ && presenter_->attached() && focused_; }
     void set_focused(bool f) {
         focused_ = f;
+        if (f) audio_.resume();
+        else audio_.pause();
         last_frame_ = std::chrono::steady_clock::now();  // no giant dt after resume
     }
 
@@ -232,7 +312,15 @@ public:
         const auto now = std::chrono::steady_clock::now();
         const float dt = std::chrono::duration<float>(now - last_frame_).count();
         last_frame_ = now;
-        game_->update(dt, controls_.consume(dt));
+        const Input in = controls_.consume(dt);
+        game_->update(dt, in);
+        AudioState as;
+        as.player_speed = game_->player_speed();
+        as.driving = game_->mode() == PlayerMode::Driving;
+        as.throttle = as.driving ? in.move_y : 0.0f;
+        as.on_ground = game_->on_ground();
+        as.payouts = game_->gigs_completed();
+        audio_.update(as);
         world_dirty_ |= game_->take_world_dirty();
         fps_ = fps_ <= 0.0f ? 1.0f / std::max(dt, 1e-3f) : fps_ * 0.95f + 0.05f / std::max(dt, 1e-3f);
 
@@ -262,6 +350,8 @@ private:
     std::unique_ptr<Renderer> renderer_;
     TouchControls controls_;
     HudBuilder hud_;
+    AudioOut audio_;
+    bool audio_started_ = false;
     float fps_ = 0.0f;
     bool focused_ = false;
     bool world_dirty_ = true;

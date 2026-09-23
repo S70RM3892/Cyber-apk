@@ -8,6 +8,7 @@
 //                           acquire/submit/present path) on a VK_EXT_headless_surface
 #include <zlib.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -15,6 +16,7 @@
 #include <string>
 #include <vector>
 
+#include "apex/audio.hpp"
 #include "apex/game.hpp"
 #include "apex/hud.hpp"
 #include "presenter.hpp"
@@ -81,6 +83,7 @@ struct Args {
     float drive_seconds = 0;
     int traffic = -1;
     int peds = -1;
+    std::string audio_out;
 };
 
 Args parse(int argc, char** argv) {
@@ -107,6 +110,7 @@ Args parse(int argc, char** argv) {
         else if (k == "--drive") a.drive_seconds = std::stof(next());
         else if (k == "--traffic") a.traffic = std::stoi(next());
         else if (k == "--peds") a.peds = std::stoi(next());
+        else if (k == "--audio") a.audio_out = next();
         else std::fprintf(stderr, "unknown argument %s\n", k.c_str());
     }
     return a;
@@ -163,9 +167,42 @@ int run_present(const Args& args) {
     return presenter.frames_presented() > 0 ? 0 : 1;
 }
 
+// 20 s demo of the soundscape: walk, complete a gig, summon the car, floor it.
+int run_audio(const Args& args) {
+    using namespace apex;
+    constexpr int kRate = 48000;
+    Synth synth(static_cast<float>(kRate));
+    std::vector<std::int16_t> pcm;
+    std::vector<float> block(480 * 2);
+    for (int i = 0; i < 20 * kRate; i += 480) {
+        const float t = static_cast<float>(i) / kRate;
+        AudioState st;
+        st.player_speed = t < 6.0f ? 4.5f : (t < 9.0f ? 0.0f : std::min(35.0f, (t - 9.0f) * 6.0f));
+        st.payouts = t > 6.0f ? 1u : 0u;
+        st.driving = t >= 9.0f;
+        st.throttle = st.driving && t < 16.0f ? 1.0f : 0.0f;
+        synth.set_state(st);
+        synth.render(block.data(), 480);
+        for (float x : block) pcm.push_back(static_cast<std::int16_t>(std::clamp(x, -1.0f, 1.0f) * 32767.0f));
+    }
+    FILE* f = std::fopen(args.audio_out.c_str(), "wb");
+    if (!f) return 1;
+    const std::uint32_t data_bytes = static_cast<std::uint32_t>(pcm.size() * 2);
+    auto u32 = [&](std::uint32_t v) { std::fwrite(&v, 4, 1, f); };
+    auto u16 = [&](std::uint16_t v) { std::fwrite(&v, 2, 1, f); };
+    std::fwrite("RIFF", 1, 4, f); u32(36 + data_bytes); std::fwrite("WAVEfmt ", 1, 8, f);
+    u32(16); u16(1); u16(2); u32(kRate); u32(kRate * 4); u16(4); u16(16);
+    std::fwrite("data", 1, 4, f); u32(data_bytes);
+    std::fwrite(pcm.data(), 2, pcm.size(), f);
+    std::fclose(f);
+    std::printf("wrote %s (20 s, 48 kHz stereo)\n", args.audio_out.c_str());
+    return 0;
+}
+
 int main(int argc, char** argv) {
     using namespace apex;
     const Args args = parse(argc, argv);
+    if (!args.audio_out.empty()) return run_audio(args);
     if (args.present_frames > 0) return run_present(args);
 
     vk::ContextDesc desc;

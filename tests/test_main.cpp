@@ -10,6 +10,7 @@
 #include <utility>
 #include <vector>
 
+#include "apex/audio.hpp"
 #include "apex/citygen.hpp"
 #include "apex/cluster_cull.hpp"
 #include "apex/normal_codec.hpp"
@@ -304,6 +305,59 @@ void test_driving() {
     game.world().wait_ready();
 }
 
+double rms(const std::vector<float>& v, std::size_t from, std::size_t to) {
+    double e = 0;
+    for (std::size_t i = from; i < to; ++i) e += double(v[i]) * v[i];
+    return std::sqrt(e / double(to - from));
+}
+
+std::vector<float> render_audio(const AudioState& st, float seconds, std::uint32_t payout_at_frame = ~0u) {
+    Synth synth(48000.0f);
+    synth.set_state(st);
+    const int frames = static_cast<int>(seconds * 48000.0f);
+    std::vector<float> out(static_cast<std::size_t>(frames) * 2);
+    for (int i = 0; i < frames; i += 480) {
+        if (payout_at_frame != ~0u && static_cast<std::uint32_t>(i) == payout_at_frame) {
+            AudioState p = st;
+            p.payouts += 1;
+            synth.set_state(p);
+        }
+        synth.render(out.data() + std::size_t(i) * 2, std::min(480, frames - i));
+    }
+    return out;
+}
+
+void test_audio() {
+    AudioState walking;
+    walking.player_speed = 4.5f;
+    const auto a = render_audio(walking, 6.0f);
+    bool finite = true;
+    float peak = 0;
+    for (float x : a) {
+        finite = finite && std::isfinite(x);
+        peak = std::max(peak, std::fabs(x));
+    }
+    CHECK(finite);
+    CHECK(peak <= 1.0f);
+    const double level = rms(a, 0, a.size());
+    CHECK(level > 0.01 && level < 0.5);
+    CHECK(render_audio(walking, 1.0f) == render_audio(walking, 1.0f));  // deterministic
+
+    // The chime adds energy right after a payout.
+    const std::size_t at = 48000 * 2;  // 2 s in
+    const auto quiet = render_audio(walking, 3.0f);
+    const auto chime = render_audio(walking, 3.0f, static_cast<std::uint32_t>(at));
+    CHECK(rms(chime, at * 2, (at + 24000) * 2) > rms(quiet, at * 2, (at + 24000) * 2) * 1.1);
+
+    // Driving flat out is louder than standing still in the car.
+    AudioState idle_car, fast_car;
+    idle_car.driving = fast_car.driving = true;
+    fast_car.player_speed = 35.0f;
+    fast_car.throttle = 1.0f;
+    const auto i1 = render_audio(idle_car, 4.0f), f1 = render_audio(fast_car, 4.0f);
+    CHECK(rms(f1, f1.size() / 2, f1.size()) > rms(i1, i1.size() / 2, i1.size()));
+}
+
 }  // namespace
 
 int main() {
@@ -320,6 +374,7 @@ int main() {
     test_gigs();
     test_jump();
     test_driving();
+    test_audio();
     if (g_failures == 0) std::puts("all tests passed");
     return g_failures == 0 ? 0 : 1;
 }

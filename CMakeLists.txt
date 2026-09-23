@@ -26,6 +26,7 @@ add_library(apex_core
     engine/src/world.cpp
     engine/src/game.cpp
     engine/src/hud.cpp
+    engine/src/audio.cpp
 )
 target_include_directories(apex_core PUBLIC engine/include)
 target_compile_options(apex_core PRIVATE ${APEX_WARNINGS})
@@ -98,7 +99,7 @@ if (ANDROID)
     target_include_directories(native_app_glue PUBLIC ${ANDROID_NDK}/sources/android/native_app_glue)
     add_library(cyberapex SHARED android/src/main/cpp/android_main.cpp)
     target_compile_options(cyberapex PRIVATE ${APEX_VK_WARNINGS})
-    target_link_libraries(cyberapex PRIVATE apex_renderer native_app_glue android log)
+    target_link_libraries(cyberapex PRIVATE apex_renderer native_app_glue android log aaudio)
     # Keep ANativeActivity_onCreate exported from the static glue library.
     set_target_properties(cyberapex PROPERTIES LINK_FLAGS "-u ANativeActivity_onCreate")
 else()
