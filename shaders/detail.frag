@@ -84,14 +84,16 @@ void main()
         s.albedo = vec3(0.01);
         s.emissive = pane * lit * vec3(1.0, 0.72, 0.42) * (0.3 + 0.3 * hash_f(ph ^ 3u));
     } else if (mat == kMatLitPanel) {
-        // Soffit light panels: a grid of tiles, some colour-tinted, a few dead.
-        vec2 g = p.xy / 1.2;
-        float tile = aa_box(fract(g.x), 0.08, 0.92, fwidth(g.x)) * aa_box(fract(g.y), 0.08, 0.92, fwidth(g.y));
+        // Soffits: dark ceiling with a lamp every 2.4 m (corridors, canopies).
+        vec2 g = p.xy / 2.4;
+        vec2 f = fract(g) - 0.5;
         uint th = hash_u3(uvec3(ucell(g), seed));
-        float on = step(0.12, hash_f(th));
+        float on = step(0.15, hash_f(th));
+        float lamp = aa_box(f.x, -0.14, 0.14, fwidth(g.x)) * aa_box(f.y, -0.14, 0.14, fwidth(g.y));
         vec3 tint = mix(vec3(1.0, 0.88, 0.72), accent, step(0.6, hash_f(seed ^ 0x1eu)) * 0.7);
-        s.albedo = vec3(0.02);
-        s.emissive = mix(tint * 0.6, tint * tile * on * 1.6, 1.0 - smoothstep(0.3, 0.8, fwidth(g.x)));
+        s.albedo = vec3(0.06);
+        float far_fade = smoothstep(0.3, 0.8, fwidth(g.x));
+        s.emissive = mix(tint * lamp * on * 2.5, tint * 0.1, far_fade);
     }
     out_color = vec4(apply_fog(shade_surface(s, p, n, view_dir, ambient), p), 1.0);
     out_material = s.material;

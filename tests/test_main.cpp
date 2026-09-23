@@ -16,6 +16,7 @@
 #include "apex/normal_codec.hpp"
 #include "apex/specular_aa.hpp"
 #include "apex/game.hpp"
+#include "apex/massing.hpp"
 #include "apex/world.hpp"
 
 namespace {
@@ -288,6 +289,14 @@ void test_signs_attached() {
             neon_text += s.kind() == SignStyle::NeonText;
             if (s.kind() == SignStyle::Blade) continue;  // sticks out perpendicular by design
             bool attached = false;
+            // Rooftop billboards stand on a frame above the roof, within its footprint.
+            if (s.kind() == SignStyle::Screen && s.z - s.height * 0.5f >= b.height) {
+                const Massing m = massing_of(b);
+                attached = std::fabs(s.x - b.x) <= m.top_footprint * 0.5f && std::fabs(s.y - b.y) <= m.top_footprint * 0.5f;
+                CHECK(attached);
+                ++checked;
+                continue;
+            }
             for (const auto& bx : boxes) {
                 const float half = bx.footprint * 0.5f;
                 const float dx = std::fabs(s.x - bx.x), dy = std::fabs(s.y - bx.y);

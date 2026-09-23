@@ -60,9 +60,11 @@ float aa_box(float x, float lo, float hi, float w)
 
 vec3 window_light(uint h)
 {
+    // Weighted like night photos of Asian apartment blocks: mostly fluorescent white.
     float r = hash_f(h);
-    if (r < 0.50) return vec3(1.0, 0.62, 0.32);        // warm tungsten
-    if (r < 0.72) return vec3(0.70, 0.85, 1.00);       // cool fluorescent
+    if (r < 0.38) return vec3(0.80, 0.90, 1.00);       // cool fluorescent
+    if (r < 0.52) return vec3(0.95, 0.95, 0.88);       // neutral LED
+    if (r < 0.74) return vec3(1.0, 0.66, 0.36);        // warm tungsten
     if (r < 0.84) return vec3(0.35, 0.55, 1.00);       // screen glow
     if (r < 0.92) return vec3(1.0, 0.35, 0.55);        // pink LED
     return neon_color(hash_u(h ^ 0x5bd1e995u));        // neon-lit interior
@@ -77,8 +79,8 @@ vec3 building_ambient(uint seed, vec3 p, vec3 n)
     // Overcast night sky: teal fill, stronger from one side so volumes read (faces of a
     // box, ledges and balconies against their wall differ in brightness).
     const vec3 kSkyDir = normalize(vec3(0.55, 0.35, 0.75));
-    vec3 sky = vec3(0.010, 0.016, 0.019) * (0.55 + 0.45 * n.z) +
-               vec3(0.012, 0.022, 0.028) * max(dot(n, kSkyDir), 0.0);
+    vec3 sky = vec3(0.018, 0.028, 0.033) * (0.55 + 0.45 * n.z) +
+               vec3(0.020, 0.036, 0.045) * max(dot(n, kSkyDir), 0.0);
     // City glow bounced up from the streets, reaching higher than the direct neon.
     vec3 bounce = vec3(0.020, 0.008, 0.012) * exp(-max(p.z, 0.0) / 60.0) * (0.6 - 0.4 * n.z);
     return sky + bounce + (glow_tint * 0.5 + vec3(0.25, 0.03, 0.04)) * street_glow * 0.06 * (1.0 - 0.6 * n.z);
@@ -128,6 +130,54 @@ void shanty_wall(float u, float v, uint seed, uint face_seed, float height, out 
     albedo_out = albedo * 6.0;
 }
 
+// Interior mapping (J. van Dongen, "Interior Mapping", CGI 2008): the window is a
+// portal into a box room behind the facade. o: position in the room's front face (m,
+// origin at the room's lower-left corner), d: view ray in room space (x along the wall,
+// y up, z into the building), size: room extent (m). light: the room's light colour
+// (zero for an unlit room). Returns the radiance seen through the glass.
+vec3 interior_room(vec2 o, vec3 d, vec3 size, vec3 light, uint h)
+{
+    vec3 inv = 1.0 / max(abs(d), vec3(1e-4));
+    float tx = (d.x > 0.0 ? size.x - o.x : o.x) * inv.x;
+    float ty = (d.y > 0.0 ? size.y - o.y : o.y) * inv.y;
+    float tz = size.z * inv.z;
+    float t = min(tx, min(ty, tz));
+    vec3 hit = vec3(o, 0.0) + d * t;
+    vec3 q = hit / size;  // 0..1 in the room
+    // One ceiling fixture: light falls off from it over the room.
+    vec2 lamp_xz = vec2(0.3 + 0.4 * hash_f(h ^ 21u), 0.35 + 0.3 * hash_f(h ^ 22u));
+    float lamp_d2 = dot(vec2(q.x, q.z) - lamp_xz, vec2(q.x, q.z) - lamp_xz);
+    float falloff = 0.35 + 0.65 * exp(-lamp_d2 * 5.0);
+    vec3 wall_tint = mix(vec3(0.9, 0.85, 0.8), vec3(0.6, 0.7, 0.8), hash_f(h ^ 23u));
+    vec3 c;
+    if (t == tz) {
+        // Back wall: a cabinet / bed / desk silhouette, maybe a poster.
+        float furn_x = hash_f(h ^ 11u), furn_w = 0.15 + 0.25 * hash_f(h ^ 12u);
+        float furniture = step(q.y, 0.25 + 0.3 * hash_f(h ^ 13u)) * step(abs(q.x - furn_x), furn_w);
+        float poster = step(abs(q.x - (1.0 - furn_x)), 0.12) * step(abs(q.y - 0.62), 0.14) * step(0.5, hash_f(h ^ 14u));
+        c = wall_tint * 0.55 * (1.0 - 0.75 * furniture);
+        c = mix(c, neon_color(h ^ 15u) * 0.8, poster * 0.7);
+    } else if (t == ty) {
+        if (d.y > 0.0) {
+            // Ceiling with the fixture itself.
+            float fixture = exp(-lamp_d2 * 120.0);
+            c = wall_tint * 0.45 + vec3(3.0) * fixture;
+        } else {
+            c = vec3(0.35, 0.3, 0.26) * 0.35;  // floor
+        }
+    } else {
+        c = wall_tint * 0.42;  // side walls
+    }
+    return c * light * falloff;
+}
+
+// Ray from the camera into a wall-aligned room: x along the wall (+u), y up, z inward.
+vec3 room_ray(vec3 view_dir, vec3 n)
+{
+    vec3 tangent = vec3(-n.y, n.x, 0.0);
+    return vec3(dot(view_dir, tangent), view_dir.z, max(-dot(view_dir, n), 0.05));
+}
+
 vec3 building_base_albedo(uint seed)
 {
     return mix(vec3(0.026, 0.034, 0.038), vec3(0.050, 0.052, 0.050), hash_f(seed ^ 0x1234u));
@@ -173,6 +223,16 @@ Surface facade(float u, float v, uint seed, uint district, uint face_seed, vec3 
         float bay_term = mix(mullion * bay_lit * fixtures, 0.96 * 0.75 * 0.8, bx);
         float floor_term = mix(slab * floor_lit * ceiling, 0.82 * 0.25 * 0.6, by);
         windows = office * bay_term * floor_term * 0.3 * 1.6;
+        if (far_blend < 0.99) {
+            // Near: open-plan office floors seen through the glass, 3 m bays, 9 m deep.
+            float bay_u = u / 3.0;
+            uint bay_hash = hash_u3(uvec3(ucell(vec2(floor(bay_u), cell.y)), face_seed));
+            vec3 light = office * floor_lit * step(hash_f(bay_hash), 0.8) * 0.16;
+            light += vec3(0.002, 0.003, 0.005);  // dark floors keep a hint of their interior
+            vec2 o = vec2(fract(bay_u) * 3.0, f.y * floor_h);
+            vec3 room = interior_room(o, room_ray(view_dir, n), vec3(3.0, floor_h, 9.0), light, bay_hash);
+            windows = mix(glass * room, windows, far_blend);
+        }
     } else {
         float wx0 = style == 2u ? 0.2 : 0.22, wy0 = style == 2u ? 0.3 : 0.32;
         glass = aa_box(f.x, wx0, 1.0 - wx0, fw.x) * aa_box(f.y, wy0, 0.80, fw.y);
@@ -182,7 +242,7 @@ Surface facade(float u, float v, uint seed, uint district, uint face_seed, vec3 
             float blades = 0.75 + 0.25 * smoothstep(0.1, 0.08, length(fan));
             extra_albedo += ac * vec3(0.10, 0.11, 0.11) * blades * (1.0 - far_blend);
         }
-        float occupancy = style == 2u ? 0.30 : district == 2u ? 0.22 : 0.08;
+        float occupancy = style == 2u ? 0.26 : district == 2u ? 0.2 : 0.08;
         // Occupancy varies per floor: at distance, towers read as floor stripes.
         float floor_var = 0.25 + 1.5 * hash_f(floor_hash ^ 0x0cu);
         float lit = step(hash_f(cell_hash), occupancy * floor_var);
@@ -193,8 +253,25 @@ Surface facade(float u, float v, uint seed, uint district, uint face_seed, vec3 
         // Far average: the mean of the near pattern (lit fraction x coverage x mean
         // brightness ~0.25), keeping per-floor variation while floors still resolve.
         float by = smoothstep(0.35, 0.8, fw.y);
-        vec3 far_avg = vec3(0.9, 0.7, 0.55) * occupancy * coverage * 0.25 * mix(floor_var, 1.0, by);
-        windows = mix(glass * lit * wl, far_avg, far_blend);
+        vec3 far_avg = vec3(0.85, 0.82, 0.78) * occupancy * coverage * 0.25 * mix(floor_var, 1.0, by);
+        vec3 near = glass * lit * wl;
+        if (far_blend < 0.99) {
+            // Rooms behind the windows: one per window cell, 3.5-5 m deep.
+            vec3 light = lit * window_light(cell_hash) * (0.2 + 0.7 * hash_f(cell_hash ^ 0x77u)) * flicker;
+            // Dark rooms: a few flicker with a TV.
+            float tv = step(hash_f(cell_hash ^ 0x7777u), 0.05) * (1.0 - lit);
+            light += tv * vec3(0.15, 0.25, 0.6) * (0.6 + 0.4 * sin(t * 7.0 + float(cell_hash & 63u)) * sin(t * 2.3));
+            light += vec3(0.002, 0.0025, 0.004);
+            vec2 o = f * vec2(pitch, floor_h);
+            vec3 room = interior_room(o, room_ray(view_dir, n), vec3(pitch, floor_h, 3.5 + 1.5 * hash_f(cell_hash ^ 5u)),
+                                      light, cell_hash);
+            // Blinds / curtains on some windows: a lit, translucent sheet at the glass.
+            float has_blind = step(hash_f(cell_hash ^ 0xb1u), 0.35);
+            float slats = mix(0.75, 1.0, step(0.5, fract(v * 12.0)) * (1.0 - smoothstep(0.3, 0.8, fwidth(v * 12.0))));
+            room = mix(room, light * 0.35 * slats * blind, has_blind * smoothstep(0.84, 0.5, f.y));
+            near = glass * room;
+        }
+        windows = mix(near, far_avg, far_blend);
     }
 
     Surface s = surface_default();
@@ -214,12 +291,47 @@ Surface facade(float u, float v, uint seed, uint district, uint face_seed, vec3 
     // Dark tinted glass: a faint teal sheen.
     vec3 glass_refl = vec3(0.010, 0.020, 0.024) * (0.6 + 0.8 * pow(1.0 - abs(dot(view_dir, n)), 3.0));
     s.emissive += (1.0 - shop) * (windows + glass * glass_refl * (1.0 - far_blend));
+    if (shop > 0.0 && far_blend < 0.99) {
+        // Shops are rooms too: 6 m bays, 7 m deep, lit in the bay's colour.
+        vec3 light = mix(vec3(1.0, 0.85, 0.7), neon_color(shop_hash), 0.65) * shop_open * 0.22 + vec3(0.003);
+        vec2 o = vec2(fract(u / 6.0) * 6.0, v);
+        vec3 room = interior_room(o, room_ray(view_dir, n), vec3(6.0, 3.8, 7.0), light, shop_hash);
+        // Shelving rows seen through the glass.
+        room *= 1.0 - 0.5 * aa_box(fract(v / 0.9), 0.0, 0.2, fwidth(v / 0.9)) * step(v, 2.4);
+        // Roll-down shutter on closed shops.
+        vec3 shutter = vec3(0.05, 0.055, 0.06) * (0.7 + 0.3 * step(0.5, fract(v * 7.0)));
+        // Storefront glazing: mullions every 1.5 m, a transom bar, a darker counter.
+        float mull = 1.0 - aa_box(fract(u / 1.5), 0.0, 0.04, fwidth(u / 1.5));
+        float transom = 1.0 - aa_box(v, 2.75, 2.85, fwidth(v));
+        float counter = mix(0.35, 1.0, smoothstep(0.9, 1.1, v));
+        room *= mull * transom * counter;
+        shop_light = mix(shutter * 0.2, room, shop_open);
+    }
     s.emissive += shop * shop_win * shop_light;
     // Walls stay out of the SSR pass: it reflects about a (perturbed) up vector only.
     s.material = vec4(0.0, 1.0, 0.5, 0.5);
 
     float panel = 0.85 + 0.3 * hash_f3(uvec3(ucell(cell), seed));
-    s.albedo = (building_base_albedo(seed) * panel + extra_albedo) * 5.0 * (1.0 - glass * 0.6);
+    vec3 wall = building_base_albedo(seed) * panel;
+    if (style != 1u) {
+        float near_detail = 1.0 - far_blend;
+        float wx0 = style == 2u ? 0.2 : 0.22, wy0 = style == 2u ? 0.3 : 0.32;
+        // Window frame (lighter) and a sill ledge under the glass.
+        float frame_outer = aa_box(f.x, wx0 - 0.04, 1.04 - wx0, fw.x) * aa_box(f.y, wy0 - 0.05, 0.83, fw.y);
+        float sill = aa_box(f.x, wx0 - 0.07, 1.07 - wx0, fw.x) * aa_box(f.y, wy0 - 0.08, wy0 - 0.03, fw.y);
+        wall = mix(wall, vec3(0.09, 0.09, 0.095), max(frame_outer - glass, 0.0) * near_detail);
+        wall = mix(wall, vec3(0.12, 0.12, 0.12), sill * near_detail);
+        // Dirt streaks running down from the sills.
+        float streak_x = aa_box(f.x, wx0 + 0.05, 1.0 - wx0 - 0.05, fw.x) * value_noise(vec2(u * 6.0, cell.y));
+        float below = smoothstep(wy0, wy0 - 0.3, f.y) * step(0.0, f.y);
+        wall *= 1.0 - 0.45 * streak_x * below * near_detail;
+        // Panel seams at each floor line.
+        float seam = aa_box(f.y, 0.0, 0.02, fw.y) * near_detail;
+        wall *= 1.0 - 0.5 * seam;
+    }
+    // Large-scale weathering so a facade isn't one flat colour.
+    wall *= 0.75 + 0.5 * value_noise(vec2(u * 0.08, v * 0.05) + float(seed & 255u));
+    s.albedo = (wall + extra_albedo) * 5.0 * (1.0 - glass * 0.6);
     // Glass catches sharp highlights from the signs around it.
     s.specular = mix(0.03, 0.25, glass * (1.0 - shop));
     s.shininess = mix(24.0, 256.0, glass);

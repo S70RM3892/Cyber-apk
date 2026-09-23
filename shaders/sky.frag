@@ -1,7 +1,7 @@
 #version 460
 #extension GL_GOOGLE_include_directive : require
-// Night sky: light-polluted gradient, a low cloud deck lit from below by the city,
-// and a few stars through the gaps.
+// Night sky: light-polluted overcast. A low smoggy cloud deck lit from below by the
+// city: teal-grey, warmer where the neon districts are.
 #include "include/city_common.glsl"
 
 layout(location = 0) in vec2 in_uv;
@@ -22,14 +22,10 @@ void main()
         float dist = (350.0 - frame.camera_pos.z) / dir.z;
         vec2 cp = frame.camera_pos.xy + dir.xy * dist;
         float n = fbm(cp * 0.004 + vec2(t * 0.01, t * 0.004));
-        float cover = smoothstep(0.35, 0.75, n);
-        vec3 under_lit = mix(vec3(0.075, 0.035, 0.04), vec3(0.035, 0.055, 0.06), value_noise(cp * 0.0015));
+        float cover = smoothstep(0.2, 0.7, n);
+        vec3 under_lit = mix(vec3(0.07, 0.04, 0.05), vec3(0.04, 0.065, 0.072), value_noise(cp * 0.0015));
         float horizon_fade = smoothstep(0.01, 0.25, dir.z);
-        // Stars only where the cloud cover is thin.
-        vec2 sp = dir.xy / (dir.z + 1.0) * 400.0;
-        float star = step(0.9975, hash_f2(ucell(sp))) * (1.0 - cover) * horizon_fade;
-        c += star * vec3(0.8, 0.85, 1.0) * 0.6;
-        c = mix(c, under_lit * (0.35 + 0.65 * n), cover * horizon_fade * 0.9);
+        c = mix(c, under_lit * (0.45 + 0.55 * n), cover * horizon_fade * 0.85);
     }
 
     out_color = vec4(c, 1.0);

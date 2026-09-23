@@ -737,6 +737,29 @@ void build_building_mesh(const city::Building& b, std::uint32_t building_index, 
     if (b.shanty) shanty(g, b, detail);
     else if (m.tower) tower(g, b, m, detail);
     else block(g, b, m, detail);
+
+    // Steel frames carrying the billboards that stand above the roof.
+    for (const SignInstance& s : signs) {
+        if (s.kind() != SignStyle::Screen || s.z - s.height * 0.5f < b.height + kBillboardLift - 0.1f) continue;
+        const V2 n{std::cos(s.yaw), std::sin(s.yaw)}, t{-n.y, n.x};
+        const V2 c{s.x, s.y};
+        const float hw = s.width * 0.5f, z0 = b.height, zb = s.z - s.height * 0.5f, zt = s.z + s.height * 0.5f;
+        // Dark backing box so the ad isn't seen mirrored from behind.
+        g.box(c - n * 0.25f, t, hw + 0.15f, 0.2f, zb - 0.3f, zt + 0.3f, M::Metal, M::Metal, M::Metal);
+        const float post[2] = {-hw + 0.4f, hw - 0.4f};
+        for (float a : post) {
+            const V2 p = c + t * a - n * 0.8f;
+            g.beam(at(p, z0), at(p, zt), 0.3f, M::Metal);
+            g.beam(at(p, z0), at(c + t * a - n * 0.3f, zb), 0.15f, M::Metal);  // strut to the frame
+        }
+        const V2 l = c + t * post[0] - n * 0.8f, r = c + t * post[1] - n * 0.8f;
+        g.beam(at(l, z0 + 0.3f), at(r, zb - 0.3f), 0.15f, M::Metal);
+        g.beam(at(r, z0 + 0.3f), at(l, zb - 0.3f), 0.15f, M::Metal);
+        g.beam(at(l, zb - 0.3f), at(r, zb - 0.3f), 0.2f, M::Metal);
+        // Service catwalk with a lamp row under the ad.
+        g.box(c + n * 0.5f, t, hw, 0.5f, zb - 0.45f, zb - 0.35f, M::Metal, M::Metal, M::Metal);
+        g.box(c + n * 0.9f, t, hw, 0.05f, zb - 0.35f, zb + 0.05f, M::LedRed, M::LedRed, M::LedRed);
+    }
 }
 
 }  // namespace apex

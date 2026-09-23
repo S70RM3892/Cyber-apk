@@ -8,12 +8,13 @@ vec3 sky_color(vec3 dir)
     float h = clamp(dir.z, -0.2, 1.0);
     // Smoggy teal night over a red-lit city: dark teal zenith, grey-teal haze at the
     // horizon, a low band of reflected neon.
-    vec3 zenith = vec3(0.003, 0.008, 0.011);
-    vec3 horizon = vec3(0.032, 0.052, 0.058);
-    vec3 glow = vec3(0.11, 0.022, 0.03);
-    float t = pow(1.0 - max(h, 0.0), 5.0);
+    // Overcast, light-polluted: no stars, the whole dome glows teal-grey from the city.
+    vec3 zenith = vec3(0.010, 0.018, 0.022);
+    vec3 horizon = vec3(0.045, 0.068, 0.074);
+    vec3 glow = vec3(0.06, 0.014, 0.02);
+    float t = pow(1.0 - max(h, 0.0), 3.0);
     vec3 c = mix(zenith, horizon, t);
-    c += glow * pow(1.0 - max(h, 0.0), 18.0);
+    c += glow * pow(1.0 - max(h, 0.0), 24.0);
     return c;
 }
 

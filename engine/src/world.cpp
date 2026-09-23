@@ -105,7 +105,7 @@ void place_signs(const city::Building& b, std::vector<SignInstance>& out) {
     int count = 0;
     switch (b.district) {
         case city::District::Megastructure: count = 9; break;
-        case city::District::Corporate: count = 4; break;
+        case city::District::Corporate: count = 7; break;
         case city::District::Residential: count = 8; break;
         case city::District::Industrial: count = 3; break;
         case city::District::Count: break;
@@ -179,7 +179,8 @@ void place_signs(const city::Building& b, std::vector<SignInstance>& out) {
     // Giant video screens on tall towers, facing the street.
     // Tall vertical neon banners on tower shafts (Japanese, top to bottom), mounted at a
     // corner and sticking out from the wall like a giant blade sign.
-    if (mass.tower && b.height > 70.0f && next() < 0.55f) {
+    for (int banner = 0; banner < 2; ++banner) {
+        if (!(mass.tower && b.height > 70.0f && next() < (banner == 0 ? 0.9f : 0.4f))) continue;
         std::uint32_t text = pick_text(true);
         if (!signtext::kStrings[text].japanese) text = text % signtext::kJapaneseCount;
         const float n = static_cast<float>(length_of(text));
@@ -202,7 +203,7 @@ void place_signs(const city::Building& b, std::vector<SignInstance>& out) {
     }
 
     if (mass.tower && b.height > 60.0f) {
-        const int screens = next() < 0.35f ? 1 : (next() < 0.7f ? 2 : 3);
+        const int screens = 2 + static_cast<int>(next() * 4.0f);
         for (int k = 0; k < screens; ++k) {
             const int face = static_cast<int>(next() * 4.0f) & 3;
             const float yaw = static_cast<float>(face) * (std::numbers::pi_v<float> * 0.5f);
@@ -212,21 +213,55 @@ void place_signs(const city::Building& b, std::vector<SignInstance>& out) {
             s.seed = static_cast<std::uint32_t>(city::hash64(h ^ (0x5c + static_cast<std::uint64_t>(k))) >> 32);
             // Screens hang on the shaft tier's wall, above the podium.
             const float flat = mass.shaft_flat();
-            const float max_w = flat * 0.85f;
-            if (next() < 0.6f) {  // portrait
-                s.width = std::min(max_w, 7.0f + next() * 6.0f);
-                s.height = s.width * (2.2f + next() * 1.2f);
+            const float max_w = flat * 0.9f;
+            if (next() < 0.6f) {  // portrait: the tall vertical ads of the target look
+                s.width = std::min(max_w, 8.0f + next() * 10.0f);
+                s.height = s.width * (2.2f + next() * 1.4f);
             } else {              // landscape
-                s.width = std::min(max_w, 14.0f + next() * 12.0f);
+                s.width = std::min(max_w, 16.0f + next() * 16.0f);
                 s.height = s.width * 0.56f;
             }
             const float face_offset = mass.shaft * 0.5f + 0.6f;  // in front of ledges and fins
             s.x = b.x + nx * face_offset + (-ny) * (next() - 0.5f) * (flat - s.width) * 0.8f;
             s.y = b.y + ny * face_offset + nx * (next() - 0.5f) * (flat - s.width) * 0.8f;
-            s.z = mass.base_top + 2.0f + s.height * 0.5f + next() * 30.0f;
+            s.z = mass.base_top + 2.0f + s.height * 0.5f + next() * std::min(90.0f, (mass.shaft_top - mass.base_top) * 0.5f);
             s.yaw = yaw;
             if (s.z + s.height * 0.5f < mass.shaft_top - 2.0f) out.push_back(s);
         }
+    }
+
+    // A wide video wall across the podium of some towers, above the shopfronts.
+    if (mass.tower && next() < 0.5f) {
+        const int face = static_cast<int>(next() * 4.0f) & 3;
+        const float yaw = static_cast<float>(face) * (std::numbers::pi_v<float> * 0.5f);
+        SignInstance s{};
+        s.style = pack(SignStyle::Screen, signtext::kJapaneseCount + static_cast<std::uint32_t>(next() * static_cast<float>(signtext::kLatinCount - 1)));
+        s.seed = static_cast<std::uint32_t>(city::hash64(h ^ 0x9d) >> 32);
+        s.width = b.footprint * (0.45f + 0.3f * next());
+        s.height = std::min(mass.base_top - 7.5f, s.width * 0.45f);
+        s.x = b.x + std::cos(yaw) * (half + 0.6f);
+        s.y = b.y + std::sin(yaw) * (half + 0.6f);
+        s.z = 5.5f + s.height * 0.5f;
+        s.yaw = yaw;
+        if (s.height > 4.0f) out.push_back(s);
+    }
+
+    // Billboards on steel frames above mid-rise roofs, facing the street (the frame is
+    // built by buildgen under any screen that sits above the roof).
+    if (!b.shanty && !mass.tower && !has_sawtooth_roof(b) && mass.top_footprint > 14.0f && next() < 0.5f) {
+        const int face = static_cast<int>(next() * 4.0f) & 3;
+        const float yaw = static_cast<float>(face) * (std::numbers::pi_v<float> * 0.5f);
+        SignInstance s{};
+        s.style = pack(SignStyle::Screen, signtext::kJapaneseCount + static_cast<std::uint32_t>(next() * static_cast<float>(signtext::kLatinCount - 1)));
+        s.seed = static_cast<std::uint32_t>(city::hash64(h ^ 0xb111) >> 32);
+        s.width = std::min(mass.top_footprint * 0.8f, 9.0f + next() * 8.0f);
+        s.height = s.width * (next() < 0.5f ? 0.5f : 1.3f);
+        const float edge = mass.top_footprint * 0.5f - 1.5f;
+        s.x = b.x + std::cos(yaw) * edge;
+        s.y = b.y + std::sin(yaw) * edge;
+        s.z = b.height + kBillboardLift + s.height * 0.5f;
+        s.yaw = yaw;
+        out.push_back(s);
     }
 
     // Landmark rooftop billboards on tall corporate/megastructure towers.

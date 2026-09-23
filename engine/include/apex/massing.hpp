@@ -21,6 +21,9 @@ struct Massing {
     float shaft_flat() const { return shaft * (1.0f - shaft_cut); }
 };
 
+// Rooftop billboards stand this high above the roof on a steel frame.
+inline constexpr float kBillboardLift = 3.5f;
+
 // Uniform [0, 1) from the high bits of a 64-bit hash.
 float unit(std::uint64_t h);
 // Stable per-building hash (from its lot position).
