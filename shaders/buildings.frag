@@ -116,7 +116,7 @@ void main()
         // Interior: bright top, shelves/counter silhouettes lower down.
         float shelves = 1.0 - 0.7 * aa_box(fract(v / 0.9), 0.0, 0.18, fwidth(v / 0.9)) * step(v, 2.6);
         float interior = mix(0.35, 1.0, smoothstep(0.5, 3.4, v)) * shelves;
-        vec3 shop_light = mix(vec3(1.0, 0.85, 0.7), neon_color(shop_hash), 0.6) * 0.8 * shop_open * interior;
+        vec3 shop_light = mix(vec3(1.0, 0.85, 0.7), neon_color(shop_hash), 0.6) * 0.5 * shop_open * interior;
         // Neon strip over the shopfront.
         float strip_on = step(0.45, hash_f(shop_hash ^ 0x2du));
         float shop_strip = aa_box(v, 3.95, 4.2, fwidth(v)) * aa_box(fract(u / 6.0), 0.1, 0.9, fwidth(u / 6.0));

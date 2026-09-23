@@ -25,6 +25,7 @@ add_library(apex_core
     engine/src/citygen.cpp
     engine/src/world.cpp
     engine/src/game.cpp
+    engine/src/hud.cpp
 )
 target_include_directories(apex_core PUBLIC engine/include)
 target_compile_options(apex_core PRIVATE ${APEX_WARNINGS})
@@ -42,7 +43,8 @@ find_program(APEX_GLSLANG glslangValidator)
 
 set(APEX_SHADERS
     buildings.vert buildings.frag ground.vert ground.frag signs.vert signs.frag
-    fullscreen.vert sky.frag rain.vert rain.frag traffic.vert traffic.frag
+    fullscreen.vert sky.frag rain.vert rain.frag traffic.vert traffic.frag hud.vert hud.frag
+    streetlife.vert streetlife.frag
     resolve.frag bloom_down.frag bloom_up.frag tonemap.frag
 )
 file(GLOB APEX_SHADER_INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}/shaders/include/*.glsl)

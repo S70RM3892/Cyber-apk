@@ -168,7 +168,7 @@ void Presenter::recreate(Renderer& renderer) {
     if (old.width != logical_.width || old.height != logical_.height) renderer.resize(logical_);
 }
 
-bool Presenter::frame(const Game& game, Renderer& renderer, bool world_dirty) {
+bool Presenter::frame(const Game& game, Renderer& renderer, bool world_dirty, std::span<const HudQuad> hud) {
     Slot& slot = slots_[slot_index_];
     VK_CHECK(vkWaitForFences(ctx_.device(), 1, &slot.fence, VK_TRUE, UINT64_MAX));
     if (world_dirty) renderer.upload_world(*game.world().snapshot());
@@ -194,7 +194,7 @@ bool Presenter::frame(const Game& game, Renderer& renderer, bool world_dirty) {
     target.extent = physical_;
     target.final_layout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
     target.pre_rotation = rotation_;
-    renderer.record(slot.cmd, slot_index_, game, target);
+    renderer.record(slot.cmd, slot_index_, game, target, hud);
     VK_CHECK(vkEndCommandBuffer(slot.cmd));
 
     VkSemaphoreSubmitInfo wait{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};

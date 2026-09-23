@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "apex/game.hpp"
+#include "apex/hud.hpp"
 #include "presenter.hpp"
 #include "renderer.hpp"
 
@@ -74,6 +75,8 @@ struct Args {
     float scale = 0.67f;
     bool validation = true;
     int present_frames = 0;
+    bool hud = true;
+    bool hud_stick = false;
 };
 
 Args parse(int argc, char** argv) {
@@ -94,6 +97,8 @@ Args parse(int argc, char** argv) {
         else if (k == "--scale") a.scale = std::stof(next());
         else if (k == "--no-validation") a.validation = false;
         else if (k == "--present") a.present_frames = std::stoi(next());
+        else if (k == "--no-hud") a.hud = false;
+        else if (k == "--hud-stick") a.hud_stick = true;
         else std::fprintf(stderr, "unknown argument %s\n", k.c_str());
     }
     return a;
@@ -125,6 +130,7 @@ int run_present(const Args& args) {
     Renderer renderer(ctx, format, presenter.logical_extent(), settings);
 
     bool dirty = true;
+    HudBuilder hud;
     for (int i = 0; i < args.present_frames; ++i) {
         Input in;
         in.move_y = 1.0f;
@@ -132,13 +138,20 @@ int run_present(const Args& args) {
         in.look_dx = 0.01f;
         game.update(1.0f / 30.0f, in);
         dirty |= game.take_world_dirty();
-        if (presenter.frame(game, renderer, dirty)) dirty = false;
+        HudInput hi;
+        hi.width = static_cast<float>(presenter.logical_extent().width);
+        hi.height = static_cast<float>(presenter.logical_extent().height);
+        hi.render_scale = renderer.settings().render_scale;
+        hi.gpu_ms = renderer.gpu_ms();
+        build_hud(hud, game, hi);
+        if (presenter.frame(game, renderer, dirty, hud.quads())) dirty = false;
+        renderer.update_dynamic_resolution();
     }
     vkDeviceWaitIdle(ctx.device());
     const Vec3 p = game.camera().position;
-    std::printf("presented=%llu of %d frames, format=%d, final pos=(%.1f, %.1f)\n",
+    std::printf("presented=%llu of %d frames, format=%d, final pos=(%.1f, %.1f), render scale %.2f\n",
                 static_cast<unsigned long long>(presenter.frames_presented()), args.present_frames, int(format), p.x,
-                p.y);
+                p.y, static_cast<double>(renderer.settings().render_scale));
     return presenter.frames_presented() > 0 ? 0 : 1;
 }
 
@@ -160,7 +173,9 @@ int main(int argc, char** argv) {
     const VkExtent2D extent{args.width, args.height};
     RenderSettings settings;
     settings.render_scale = args.scale;
+    settings.dynamic_resolution = false;  // deterministic screenshots
     Renderer renderer(ctx, VK_FORMAT_R8G8B8A8_UNORM, extent, settings);
+    HudBuilder hud;
 
     vk::Image output = vk::create_image(ctx, extent, VK_FORMAT_R8G8B8A8_UNORM,
                                         VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
@@ -193,7 +208,17 @@ int main(int argc, char** argv) {
         VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
         bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
         VK_CHECK(vkBeginCommandBuffer(cmd, &bi));
-        renderer.record(cmd, static_cast<std::uint32_t>(frame) % Renderer::kFramesInFlight, game, target);
+        HudInput hi;
+        hi.width = static_cast<float>(extent.width);
+        hi.height = static_cast<float>(extent.height);
+        hi.fps = 60.0f;
+        hi.render_scale = settings.render_scale;
+        if (args.hud_stick) {
+            hi.stick = {true, hi.width * 0.15f, hi.height * 0.75f, 0.3f, 0.8f, hi.height * 0.12f};
+        }
+        if (args.hud) build_hud(hud, game, hi);
+        renderer.record(cmd, static_cast<std::uint32_t>(frame) % Renderer::kFramesInFlight, game, target,
+                        args.hud ? std::span<const HudQuad>(hud.quads()) : std::span<const HudQuad>{});
         if (frame == args.frames - 1) {
             VkBufferImageCopy copy{};
             copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};

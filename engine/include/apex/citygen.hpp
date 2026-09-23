@@ -29,7 +29,7 @@ struct Params {
     float district_size = 400.0f;  // metres between Voronoi sites (grid pitch)
     float road_half_width = 9.0f;  // half-width of arterial roads on cell borders
     float block_size = 60.0f;      // metres per building lot grid inside a district
-    float street_half_width = 4.0f;
+    float street_half_width = 7.0f;  // side-street corridor: 4.5 m roadway + sidewalk
 };
 
 struct DistrictSample {

@@ -7,21 +7,29 @@
 
 #include <array>
 #include <cstdint>
+#include <span>
 #include <vector>
 
 #include "apex/game.hpp"
+#include "apex/hud.hpp"
 #include "vk_resources.hpp"
 
 namespace apex {
 
 struct RenderSettings {
     float render_scale = 0.67f;  // internal resolution relative to output (spec §4.3 DRS range)
+    // Dynamic resolution: steer render_scale within [min, max] to keep GPU time under
+    // the budget. 0.5 of 1080p = 540p, the floor of the spec's DRS range.
+    bool dynamic_resolution = true;
+    float min_scale = 0.5f, max_scale = 0.75f;
+    float gpu_budget_ms = 13.0f;  // leaves headroom inside a 16.6 ms vsync interval
     int ssr_steps = 24;
     float exposure = 1.5f;
     float bloom_strength = 0.9f;
     float rain = 1.0f;
     float fog_density = 0.0045f;
-    std::uint32_t traffic_count = 400;
+    std::uint32_t traffic_count = 580;     // first 320 fly (traffic.vert kAirCount), the rest drive
+    std::uint32_t pedestrian_count = 700;
 };
 
 struct OutputTarget {
@@ -51,7 +59,13 @@ public:
     // the player crosses a tile boundary).
     void upload_world(const CitySnapshot& snap);
 
-    void record(VkCommandBuffer cmd, std::uint32_t frame_slot, const Game& game, const OutputTarget& target);
+    void record(VkCommandBuffer cmd, std::uint32_t frame_slot, const Game& game, const OutputTarget& target,
+                std::span<const HudQuad> hud = {});
+
+    // GPU time of the most recently completed frame (0 if timestamps are unsupported).
+    float gpu_ms() const { return gpu_ms_; }
+    // Feed after each frame; may change the internal resolution (with a GPU idle).
+    void update_dynamic_resolution();
 
     RenderSettings& settings() { return settings_; }
     VkExtent2D internal_extent() const { return internal_; }
@@ -97,9 +111,27 @@ private:
     VkPipelineLayout scene_layout_ = VK_NULL_HANDLE;
     VkPipelineLayout post_layout_ = VK_NULL_HANDLE;
     VkPipeline ground_pso_ = VK_NULL_HANDLE, buildings_pso_ = VK_NULL_HANDLE, signs_pso_ = VK_NULL_HANDLE,
-               sky_pso_ = VK_NULL_HANDLE, rain_pso_ = VK_NULL_HANDLE, traffic_pso_ = VK_NULL_HANDLE;
+               sky_pso_ = VK_NULL_HANDLE, rain_pso_ = VK_NULL_HANDLE, traffic_pso_ = VK_NULL_HANDLE,
+               streetlife_pso_ = VK_NULL_HANDLE;
     VkPipeline resolve_pso_ = VK_NULL_HANDLE, bloom_down_pso_ = VK_NULL_HANDLE, bloom_up_pso_ = VK_NULL_HANDLE,
                tonemap_pso_ = VK_NULL_HANDLE;
+
+    // HUD
+    static constexpr std::uint32_t kMaxHudQuads = 4096;
+    VkDescriptorSetLayout hud_set_layout_ = VK_NULL_HANDLE;
+    VkDescriptorPool hud_pool_ = VK_NULL_HANDLE;
+    VkPipelineLayout hud_layout_ = VK_NULL_HANDLE;
+    VkPipeline hud_pso_ = VK_NULL_HANDLE;
+    std::array<vk::Buffer, kFramesInFlight> hud_buffers_{};
+    std::array<VkDescriptorSet, kFramesInFlight> hud_sets_{};
+
+    // GPU timing + dynamic resolution
+    VkQueryPool timestamps_ = VK_NULL_HANDLE;
+    std::array<bool, kFramesInFlight> timestamps_written_{};
+    float timestamp_period_ns_ = 0.0f;
+    float gpu_ms_ = 0.0f;
+    float gpu_ms_avg_ = 0.0f;
+    int frames_since_resize_ = 0;
 
     void create_static();
     void create_pipelines();

@@ -32,7 +32,7 @@ public:
     // Acquire -> record -> submit -> present. Handles out-of-date / suboptimal
     // swapchains (Android rotation) by recreating and resizing the renderer.
     // Returns false if the frame was skipped.
-    bool frame(const Game& game, Renderer& renderer, bool world_dirty);
+    bool frame(const Game& game, Renderer& renderer, bool world_dirty, std::span<const HudQuad> hud = {});
 
     std::uint64_t frames_presented() const { return presented_; }
 

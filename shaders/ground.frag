@@ -4,17 +4,14 @@
 // from the lot grid, sidewalks, lane paint, rain-soaked asphalt with puddles, and
 // analytic street-lamp pools (an infinite periodic lattice of lights, no light list).
 #include "include/city_common.glsl"
+#include "include/street_layout.glsl"
 
 layout(location = 0) in vec3 in_world_pos;
 
 layout(location = 0) out vec4 out_color;
 layout(location = 1) out vec4 out_material;
 
-const float kBlock = 60.0;          // city::Params::block_size
-const float kStreetHalf = 4.0;      // city::Params::street_half_width
-const float kRoadHalf = 9.0;        // city::Params::road_half_width
 const float kRoadRange = 32.0;      // RoadField::kRange
-const float kLampSpacing = 30.0;
 
 float aa_step(float edge, float x, float w) { return clamp((x - edge) / max(w, 1e-4) + 0.5, 0.0, 1.0); }
 
@@ -35,9 +32,9 @@ void main()
 
     float w_art = fwidth(d_art), w_side = fwidth(d_side);
     float on_art = 1.0 - aa_step(kRoadHalf, d_art, w_art);
-    float on_side = 1.0 - aa_step(kStreetHalf, d_side, w_side);
+    float on_side = 1.0 - aa_step(kRoadwayHalf, d_side, w_side);
     float road = max(on_art, on_side);
-    float curb = max(1.0 - aa_step(kRoadHalf + 3.0, d_art, w_art), 1.0 - aa_step(kStreetHalf + 2.5, d_side, w_side));
+    float curb = max(1.0 - aa_step(kRoadHalf + 3.0, d_art, w_art), 1.0 - aa_step(kCorridorHalf + 0.5, d_side, w_side));
     float sidewalk = clamp(curb - road, 0.0, 1.0);
 
     // Lane paint.
@@ -60,22 +57,22 @@ void main()
     float wet = mix(0.35, 0.95, puddle) * rain;
     albedo *= mix(1.0, 0.45, wet);  // wet surfaces darken
 
-    // Street lamps: lattice along side streets, offset to the sidewalk edge.
-    vec2 lamp_cell = floor(p / kLampSpacing + 0.5);
-    vec2 lamp_pos = lamp_cell * kLampSpacing;
-    uint lamp_hash = hash_u2(ucell(lamp_cell));
-    vec3 lamp_col = hash_f(lamp_hash) < 0.6 ? vec3(1.0, 0.55, 0.2) : vec3(0.6, 0.8, 1.0);
-    float lamp_on = step(0.12, hash_f(lamp_hash ^ 0x55u));
-    float ld = length(p - lamp_pos);
-    float lamp = lamp_on * 6.0 / (1.0 + ld * ld * 0.08) * (1.0 - on_art * 0.5);
+    // Street lamps (same lattice as the lamp-post geometry in streetlife.vert).
+    vec3 lamps = lamp_light(vec3(p, 0.0));
 
-    // Neon spill from shopfronts: coloured glow close to lot edges.
-    vec2 lot = floor(p / kBlock);
-    vec3 spill_col = neon_color(hash_u2(ucell(lot * 7.0 + floor(p / 6.0))));
-    float spill = (1.0 - smoothstep(kStreetHalf + 1.0, kStreetHalf + 7.0, d_side)) * 0.15 * (1.0 - on_art);
+    // Neon spill from the shopfronts: colour varies smoothly along the street (blend of
+    // neighbouring 6 m shop bays), strongest at the building line, fading over the road.
+    float bay = along / 6.0;
+    float bay_f = smoothstep(0.2, 0.8, fract(bay));
+    vec2 line_id = floor(p / kBlock + 0.5);
+    uint street_seed = hash_u2(ucell(line_id * vec2(dist_lines.x < dist_lines.y ? 1.0 : 0.0, dist_lines.x < dist_lines.y ? 0.0 : 1.0)));
+    vec3 spill_col = mix(neon_color(hash_u(street_seed ^ uint(int(floor(bay)) + 5000))),
+                         neon_color(hash_u(street_seed ^ uint(int(floor(bay)) + 5001))), bay_f);
+    float spill = smoothstep(kRoadwayHalf - 2.0, kCorridorHalf + 1.0, d_side) * (1.0 - smoothstep(kCorridorHalf + 1.0, kCorridorHalf + 4.0, d_side));
+    spill *= 0.05 * (1.0 - on_art);
 
     vec3 ambient = vec3(0.012, 0.012, 0.03);
-    vec3 lit = albedo * (ambient * 4.0 + lamp_col * lamp + spill_col * spill * 8.0);
+    vec3 lit = albedo * (ambient * 4.0 + lamps + spill_col * spill * 8.0);
 
     // Puddle ripples from rain: perturb the reflection normal.
     vec2 ripple = vec2(0.0);

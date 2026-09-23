@@ -1,6 +1,7 @@
 #include "renderer.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 
 #include "shaders_embedded.hpp"
@@ -69,7 +70,7 @@ Mat4 inverse(const Mat4& a) {
     return r;
 }
 
-enum class Blend { None, Additive };
+enum class Blend { None, Additive, Alpha };
 
 struct PipelineDesc {
     std::span<const std::uint32_t> vs, fs;
@@ -120,6 +121,14 @@ VkPipeline make_pipeline(const vk::Context& ctx, const PipelineDesc& d) {
             a.colorBlendOp = VK_BLEND_OP_ADD;
             a.srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
             a.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+            a.alphaBlendOp = VK_BLEND_OP_ADD;
+        } else if (d.blend == Blend::Alpha) {
+            a.blendEnable = VK_TRUE;
+            a.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+            a.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+            a.colorBlendOp = VK_BLEND_OP_ADD;
+            a.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+            a.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
             a.alphaBlendOp = VK_BLEND_OP_ADD;
         }
     }
@@ -191,12 +200,18 @@ Renderer::~Renderer() {
     VkDevice dev = ctx_.device();
     vkDeviceWaitIdle(dev);
     destroy_sized();
-    for (VkPipeline p : {ground_pso_, buildings_pso_, signs_pso_, sky_pso_, rain_pso_, traffic_pso_, resolve_pso_, bloom_down_pso_,
+    for (VkPipeline p : {ground_pso_, buildings_pso_, signs_pso_, sky_pso_, rain_pso_, traffic_pso_, streetlife_pso_, resolve_pso_, bloom_down_pso_,
                          bloom_up_pso_, tonemap_pso_})
         vkDestroyPipeline(dev, p, nullptr);
+    vkDestroyPipeline(dev, hud_pso_, nullptr);
+    vkDestroyPipelineLayout(dev, hud_layout_, nullptr);
+    vkDestroyDescriptorSetLayout(dev, hud_set_layout_, nullptr);
+    for (auto& b : hud_buffers_) vk::destroy(ctx_, b);
+    if (timestamps_) vkDestroyQueryPool(dev, timestamps_, nullptr);
     vkDestroyPipelineLayout(dev, scene_layout_, nullptr);
     vkDestroyPipelineLayout(dev, post_layout_, nullptr);
     vkDestroyDescriptorPool(dev, static_pool_, nullptr);
+    vkDestroyDescriptorPool(dev, hud_pool_, nullptr);
     vkDestroyDescriptorSetLayout(dev, scene_set_layout_, nullptr);
     vkDestroyDescriptorSetLayout(dev, post_set_layout_, nullptr);
     vkDestroySampler(dev, linear_clamp_, nullptr);
@@ -258,7 +273,7 @@ void Renderer::create_static() {
         b[0] = {0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 1, vf, nullptr};
         b[1] = {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, vf, nullptr};
         b[2] = {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, vf, nullptr};
-        b[3] = {3, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
+        b[3] = {3, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, vf, nullptr};  // vertex: arterial culling
         VkDescriptorSetLayoutCreateInfo ci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
         ci.bindingCount = 4;
         ci.pBindings = b;
@@ -304,6 +319,62 @@ void Renderer::create_static() {
         ai.pSetLayouts = &scene_set_layout_;
         VK_CHECK(vkAllocateDescriptorSets(dev, &ai, &scene_set_));
         write_scene_set();
+    }
+
+    // HUD: one quad buffer per frame in flight, rewritten every frame.
+    {
+        VkDescriptorSetLayoutBinding b{0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
+                                       VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
+        VkDescriptorSetLayoutCreateInfo ci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+        ci.bindingCount = 1;
+        ci.pBindings = &b;
+        VK_CHECK(vkCreateDescriptorSetLayout(dev, &ci, nullptr, &hud_set_layout_));
+        VkPushConstantRange pc{VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, 16};
+        VkPipelineLayoutCreateInfo li{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+        li.setLayoutCount = 1;
+        li.pSetLayouts = &hud_set_layout_;
+        li.pushConstantRangeCount = 1;
+        li.pPushConstantRanges = &pc;
+        VK_CHECK(vkCreatePipelineLayout(dev, &li, nullptr, &hud_layout_));
+
+        VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, kFramesInFlight};
+        VkDescriptorPoolCreateInfo pci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+        pci.maxSets = kFramesInFlight;
+        pci.poolSizeCount = 1;
+        pci.pPoolSizes = &size;
+        VkDescriptorPool pool;
+        VK_CHECK(vkCreateDescriptorPool(dev, &pci, nullptr, &pool));
+        hud_pool_ = pool;
+        for (std::uint32_t i = 0; i < kFramesInFlight; ++i) {
+            hud_buffers_[i] = vk::create_buffer(ctx_, kMaxHudQuads * sizeof(HudQuad), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
+            VkDescriptorSetAllocateInfo ai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+            ai.descriptorPool = hud_pool_;
+            ai.descriptorSetCount = 1;
+            ai.pSetLayouts = &hud_set_layout_;
+            VK_CHECK(vkAllocateDescriptorSets(dev, &ai, &hud_sets_[i]));
+            VkDescriptorBufferInfo bi{hud_buffers_[i].buffer, 0, VK_WHOLE_SIZE};
+            VkWriteDescriptorSet w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+            w.dstSet = hud_sets_[i];
+            w.descriptorCount = 1;
+            w.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            w.pBufferInfo = &bi;
+            vkUpdateDescriptorSets(dev, 1, &w, 0, nullptr);
+        }
+    }
+
+    // GPU timestamps (2 per frame slot), if the queue supports them.
+    {
+        std::uint32_t n = 0;
+        vkGetPhysicalDeviceQueueFamilyProperties(ctx_.physical_device(), &n, nullptr);
+        std::vector<VkQueueFamilyProperties> q(n);
+        vkGetPhysicalDeviceQueueFamilyProperties(ctx_.physical_device(), &n, q.data());
+        if (q[ctx_.queue_family()].timestampValidBits > 0 && ctx_.properties().limits.timestampPeriod > 0.0f) {
+            VkQueryPoolCreateInfo qi{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
+            qi.queryType = VK_QUERY_TYPE_TIMESTAMP;
+            qi.queryCount = 2 * kFramesInFlight;
+            VK_CHECK(vkCreateQueryPool(dev, &qi, nullptr, &timestamps_));
+            timestamp_period_ns_ = ctx_.properties().limits.timestampPeriod;
+        }
     }
 }
 
@@ -366,6 +437,10 @@ void Renderer::create_pipelines() {
     d.fs = sh::traffic_frag;
     traffic_pso_ = make_pipeline(ctx_, d);
 
+    d.vs = sh::streetlife_vert;
+    d.fs = sh::streetlife_frag;
+    streetlife_pso_ = make_pipeline(ctx_, d);
+
     d.vs = sh::signs_vert;
     d.fs = sh::signs_frag;
     d.cull = VK_CULL_MODE_NONE;
@@ -402,6 +477,12 @@ void Renderer::create_pipelines() {
     p.fs = sh::tonemap_frag;
     p.blend = Blend::None;
     tonemap_pso_ = make_pipeline(ctx_, p);
+
+    p.layout = hud_layout_;
+    p.vs = sh::hud_vert;
+    p.fs = sh::hud_frag;
+    p.blend = Blend::Alpha;
+    hud_pso_ = make_pipeline(ctx_, p);
 }
 
 void Renderer::create_sized() {
@@ -567,8 +648,20 @@ void Renderer::fullscreen_pass(VkCommandBuffer cmd, VkImageView target, VkExtent
     ctx_.fns().cmd_end_rendering(cmd);
 }
 
-void Renderer::record(VkCommandBuffer cmd, std::uint32_t slot, const Game& game, const OutputTarget& target) {
+void Renderer::record(VkCommandBuffer cmd, std::uint32_t slot, const Game& game, const OutputTarget& target,
+                      std::span<const HudQuad> hud) {
     update_frame_ubo(slot, game);
+    if (timestamps_) {
+        // The caller waited for this slot's previous submission, so its queries are final.
+        if (timestamps_written_[slot]) {
+            std::uint64_t ts[2] = {};
+            if (vkGetQueryPoolResults(ctx_.device(), timestamps_, 2 * slot, 2, sizeof(ts), ts, sizeof(std::uint64_t),
+                                      VK_QUERY_RESULT_64_BIT) == VK_SUCCESS && ts[1] > ts[0])
+                gpu_ms_ = static_cast<float>(static_cast<double>(ts[1] - ts[0]) * timestamp_period_ns_ * 1e-6);
+        }
+        vkCmdResetQueryPool(cmd, timestamps_, 2 * slot, 2);
+        vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, timestamps_, 2 * slot);
+    }
     const auto& fns = ctx_.fns();
     using vk::ImageTransition;
 
@@ -624,6 +717,13 @@ void Renderer::record(VkCommandBuffer cmd, std::uint32_t slot, const Game& game,
         if (settings_.traffic_count) {
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, traffic_pso_);
             vkCmdDraw(cmd, 36, settings_.traffic_count, 0, 0);
+        }
+        {
+            // Lamp posts (3 boxes each) then pedestrians (6 boxes each); see streetlife.vert.
+            constexpr std::uint32_t kLampCount = 2 * 9 * 2 * 20;
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, streetlife_pso_);
+            vkCmdDraw(cmd, 3 * 36, kLampCount, 0, 0);
+            if (settings_.pedestrian_count) vkCmdDraw(cmd, 6 * 36, settings_.pedestrian_count, 0, kLampCount);
         }
         if (road_field_ready_) {
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, ground_pso_);
@@ -716,12 +816,73 @@ void Renderer::record(VkCommandBuffer cmd, std::uint32_t slot, const Game& game,
         } push{settings_.exposure, settings_.bloom_strength, game.time(), srgb ? 1.0f : 0.0f, target.pre_rotation, {}};
         fullscreen_pass(cmd, target.view, target.extent, tonemap_pso_, tonemap_set_, slot, &push, sizeof(push), false);
 
+        if (!hud.empty()) {
+            const std::uint32_t count = static_cast<std::uint32_t>(std::min<std::size_t>(hud.size(), kMaxHudQuads));
+            std::memcpy(hud_buffers_[slot].mapped, hud.data(), count * sizeof(HudQuad));
+            VkRenderingAttachmentInfo color{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+            color.imageView = target.view;
+            color.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            color.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+            color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+            VkRenderingInfo ri{VK_STRUCTURE_TYPE_RENDERING_INFO};
+            ri.renderArea = {{0, 0}, target.extent};
+            ri.layerCount = 1;
+            ri.colorAttachmentCount = 1;
+            ri.pColorAttachments = &color;
+            // The tonemap pass wrote the same attachment: order its writes before our blend reads.
+            VkMemoryBarrier2 mb{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+            mb.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+            mb.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+            mb.dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+            mb.dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+            VkDependencyInfo dep{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+            dep.memoryBarrierCount = 1;
+            dep.pMemoryBarriers = &mb;
+            fns.cmd_pipeline_barrier2(cmd, &dep);
+            fns.cmd_begin_rendering(cmd, &ri);
+            set_viewport(cmd, target.extent);
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, hud_pso_);
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, hud_layout_, 0, 1, &hud_sets_[slot], 0,
+                                    nullptr);
+            struct {
+                float w, h;
+                std::int32_t rotation, srgb;
+            } hp{static_cast<float>(output_extent_.width), static_cast<float>(output_extent_.height),
+                 target.pre_rotation, srgb ? 1 : 0};
+            vkCmdPushConstants(cmd, hud_layout_, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+                               sizeof(hp), &hp);
+            vkCmdDraw(cmd, 6, count, 0, 0);
+            fns.cmd_end_rendering(cmd);
+        }
+
         const bool to_present = target.final_layout == VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
         vk::transition(ctx_, cmd, {target.image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, target.final_layout,
                                    VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
                                    to_present ? VK_PIPELINE_STAGE_2_NONE : VK_PIPELINE_STAGE_2_COPY_BIT,
                                    to_present ? VK_ACCESS_2_NONE : VK_ACCESS_2_TRANSFER_READ_BIT});
     }
+    if (timestamps_) {
+        vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, timestamps_, 2 * slot + 1);
+        timestamps_written_[slot] = true;
+    }
+}
+
+void Renderer::update_dynamic_resolution() {
+    if (!settings_.dynamic_resolution || gpu_ms_ <= 0.0f) return;
+    gpu_ms_avg_ = gpu_ms_avg_ <= 0.0f ? gpu_ms_ : gpu_ms_avg_ * 0.95f + gpu_ms_ * 0.05f;
+    // Resizing idles the GPU and reallocates targets: at most every ~2 s, in 5% steps,
+    // with a dead band so it doesn't oscillate.
+    if (++frames_since_resize_ < 120) return;
+    float scale = settings_.render_scale;
+    if (gpu_ms_avg_ > settings_.gpu_budget_ms * 1.05f) scale -= 0.05f;
+    else if (gpu_ms_avg_ < settings_.gpu_budget_ms * 0.75f) scale += 0.05f;
+    scale = std::clamp(scale, settings_.min_scale, settings_.max_scale);
+    if (std::fabs(scale - settings_.render_scale) < 1e-3f) return;
+    APEX_LOGI("DRS: gpu %.1f ms -> render scale %.2f", static_cast<double>(gpu_ms_avg_), static_cast<double>(scale));
+    settings_.render_scale = scale;
+    frames_since_resize_ = 0;
+    gpu_ms_avg_ = 0.0f;
+    resize(output_extent_);
 }
 
 }  // namespace apex
