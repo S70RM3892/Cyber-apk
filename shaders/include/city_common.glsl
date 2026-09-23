@@ -118,7 +118,9 @@ float glyph_distance(uint g, vec2 uv)
 {
     if (g == 0u || any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0)))) return -1.0;
     vec2 cell = vec2(float(g % 16u), float(g / 16u));
-    float d = texture(sign_atlas, (cell + clamp(uv, vec2(0.01), vec2(0.99))) / kAtlasCells).r;
+    // Stay 2 texels (of 48) inside the cell: bilinear taps at the edge would pick up the
+    // neighbouring glyph and draw dashed outlines around the sign.
+    float d = texture(sign_atlas, (cell + clamp(uv, vec2(0.042), vec2(0.958))) / kAtlasCells).r;
     return (d - 0.5) * kGlyphSdfScale;
 }
 

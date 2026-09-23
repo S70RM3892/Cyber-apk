@@ -30,6 +30,14 @@ vec3 neon_glyph(float d, float aa, vec3 col, float intensity, out float coverage
     return (hot * core + col * halo * 0.35) * intensity;
 }
 
+// Pixel footprint in glyph-cell units for cells `cell_m` metres tall. Derived from the
+// world position, not fwidth(d): d jumps where one glyph cell meets the next, and its
+// derivative there would smear a line along every cell border.
+float glyph_aa(float cell_m)
+{
+    return length(fwidth(in_world_pos)) / max(cell_m, 1e-3) * 1.12 + 1e-4;
+}
+
 // Distance to the text laid out along one axis. `along` in [0,1] across the whole
 // string, `across` in [0,1] across the line; glyph cells are square in world space
 // when the sign's aspect is n : 1.
@@ -156,7 +164,7 @@ void main()
         // Big rooftop lettering is red/pink in 80% of cases, like the target look.
         if (hash_f(h ^ 0x7eu) < 0.8) col = neon_warm(h);
         float d = text_distance(text, uv.x, uv.y, false);
-        float aa = fwidth(d) + 1e-4;
+        float aa = glyph_aa(s.size.y);
         float cov;
         emissive = neon_glyph(d, aa, col, intensity * 1.2, cov) * broken;
         out_color = vec4(emissive * (1.0 - fog_amount(in_world_pos)), 0.0);
@@ -180,7 +188,7 @@ void main()
         float ta = (uv.x - 0.5) * s.size.x / tw + 0.5;
         float d = (ta > 0.0 && ta < 1.0) ? text_distance(text, ta, (uv.y - 0.25) / 0.5, false) : -1.0;
         float cov;
-        emissive = bg * 1.6 + neon_glyph(d, fwidth(d) + 1e-4, vec3(1.0, 0.95, 0.9), 3.0, cov);
+        emissive = bg * 1.6 + neon_glyph(d, glyph_aa(s.size.y * 0.5), vec3(1.0, 0.95, 0.9), 3.0, cov);
         emissive += border * col * intensity;
     } else if (style == kBlade) {
         if (hash_f(h ^ 0x7eu) < 0.55) col = neon_warm(h);
@@ -190,14 +198,14 @@ void main()
         float along = (uv.y - inner) / (1.0 - 2.0 * inner);
         float d = (along > 0.0 && along < 1.0) ? text_distance(text, along, uv.x, true) : -1.0;
         float cov;
-        emissive = neon_glyph(d, fwidth(d) + 1e-4, col, intensity, cov) + border * col2 * intensity * 0.7;
+        emissive = neon_glyph(d, glyph_aa(s.size.x), col, intensity, cov) + border * col2 * intensity * 0.7;
     } else {
         // Wall panel: half are backlit light boxes with dark lettering, half neon on black.
         uint n = max(sign_string_length(text), 1u);
         float inner = 0.2 / (float(n) * 0.8 + 0.4);
         float along = (uv.x - inner) / (1.0 - 2.0 * inner);
         float d = (along > 0.0 && along < 1.0) ? text_distance(text, along, uv.y, false) : -1.0;
-        float aa = fwidth(d) + 1e-4;
+        float aa = glyph_aa(s.size.y);
         if (hash_f(h ^ 0x44u) < 0.5) {
             vec3 box = mix(col, vec3(1.0), 0.25) * (0.45 + 0.2 * uv.y);
             float letter = smoothstep(-aa, aa, d);
