@@ -209,6 +209,46 @@ void test_signs() {
     }
 }
 
+void test_signs_attached() {
+    // Every wall-mounted sign must touch a box of its own building: its centre lies within
+    // 0.6 m of some box's side (or roof for neon lettering), inside that box's height range.
+    city::Params p;
+    p.seed = 11;
+    int screens = 0, neon_text = 0, checked = 0;
+    for (const auto& b : city::generate_tile(p, 0, 0, 1024.0f)) {
+        std::vector<BuildingInstance> boxes;
+        add_building_boxes(b, boxes);
+        std::vector<SignInstance> signs;
+        place_signs(b, signs);
+        for (const SignInstance& s : signs) {
+            screens += s.kind() == SignStyle::Screen;
+            neon_text += s.kind() == SignStyle::NeonText;
+            if (s.kind() == SignStyle::Blade) continue;  // sticks out perpendicular by design
+            bool attached = false;
+            for (const auto& bx : boxes) {
+                const float half = bx.footprint * 0.5f;
+                const float dx = std::fabs(s.x - bx.x), dy = std::fabs(s.y - bx.y);
+                if (s.kind() == SignStyle::NeonText) {
+                    attached |= (bx.flags & BuildingInstance::kTopTier) && dx <= half && dy <= half &&
+                                s.z - s.height * 0.5f >= bx.height - 0.01f;
+                } else {
+                    const float face = std::max(dx, dy);
+                    attached |= std::fabs(face - half) < 0.6f && s.z >= bx.base_z && s.z <= bx.height;
+                }
+            }
+            if (!attached)
+                std::fprintf(stderr, "  unattached sign kind=%u z=%.1f h=%.1f bld h=%.1f district=%u boxes=%zu\n",
+                             static_cast<unsigned>(s.kind()), static_cast<double>(s.z), static_cast<double>(s.height),
+                             static_cast<double>(b.height), static_cast<unsigned>(b.district), boxes.size());
+            CHECK(attached);
+            ++checked;
+        }
+    }
+    CHECK(checked > 100);
+    CHECK(screens > 0);
+    CHECK(neon_text > 0);
+}
+
 void test_collision() {
     // Walking in a straight line through the city never ends up inside a building.
     Game game(2077);
@@ -370,6 +410,7 @@ int main() {
     test_citygen_roads();
     test_building_boxes();
     test_signs();
+    test_signs_attached();
     test_collision();
     test_gigs();
     test_jump();

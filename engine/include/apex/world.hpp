@@ -25,12 +25,22 @@ struct BuildingInstance {
 };
 static_assert(sizeof(BuildingInstance) == 32);
 
-enum class SignStyle : std::uint32_t { WallPanel = 0, Blade = 1, Rooftop = 2 };
+enum class SignStyle : std::uint32_t {
+    WallPanel = 0,  // lit box sign flat on a wall, horizontal text
+    Blade = 1,      // vertical sign sticking out of a wall, vertical Japanese text
+    Rooftop = 2,    // animated billboard on a tower top
+    Screen = 3,     // giant video screen on a facade
+    NeonText = 4,   // free-standing neon lettering (no backplate), e.g. on a roof
+};
 
 struct SignInstance {
     float x, y, z, yaw;       // centre (metres), facing direction around +Z
     float width, height;      // metres
-    std::uint32_t seed, style;
+    std::uint32_t seed;
+    std::uint32_t style;      // bits 0-7 SignStyle, bits 8-15 string id (sign_text_data.hpp)
+
+    SignStyle kind() const { return static_cast<SignStyle>(style & 0xFF); }
+    std::uint32_t text() const { return (style >> 8) & 0xFF; }
 };
 static_assert(sizeof(SignInstance) == 32);
 

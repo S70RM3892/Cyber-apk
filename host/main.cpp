@@ -84,6 +84,7 @@ struct Args {
     int traffic = -1;
     int peds = -1;
     std::string audio_out;
+    float eye = 0;  // debug: override camera height (elevated reference views)
 };
 
 Args parse(int argc, char** argv) {
@@ -111,6 +112,7 @@ Args parse(int argc, char** argv) {
         else if (k == "--traffic") a.traffic = std::stoi(next());
         else if (k == "--peds") a.peds = std::stoi(next());
         else if (k == "--audio") a.audio_out = next();
+        else if (k == "--eye") a.eye = std::stof(next());
         else std::fprintf(stderr, "unknown argument %s\n", k.c_str());
     }
     return a;
@@ -258,6 +260,7 @@ int main(int argc, char** argv) {
             in.move_y = game.time() < args.drive_seconds ? 1.0f : 0.0f;
         }
         game.update(dt, in);
+        if (args.eye > 0.0f) game.camera().position.z = args.eye;
         if (game.take_world_dirty()) renderer.upload_world(*game.world().snapshot());
 
         const auto t0 = std::chrono::steady_clock::now();

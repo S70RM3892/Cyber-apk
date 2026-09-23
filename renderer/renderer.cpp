@@ -4,11 +4,17 @@
 #include <cmath>
 #include <cstring>
 
+#include "apex/sign_text_data.hpp"
 #include "shaders_embedded.hpp"
+#include "sign_font_sdf.hpp"
 
 namespace apex {
 
 namespace {
+
+static_assert(signtext::kCols == 16 && signtext::kRows == 9 && signtext::kCell == 48 && signtext::kSpread == 6.0f,
+              "shaders/include/city_common.glsl hard-codes the sign atlas layout");
+static_assert(signtext::kGlyphChoonpu == 44, "city_common.glsl kGlyphChoonpu");
 
 // std140 mirror of shaders/include/frame_ubo.glsl.
 struct FrameUniforms {
@@ -211,7 +217,7 @@ Renderer::~Renderer() {
     vkDeviceWaitIdle(dev);
     destroy_sized();
     for (VkPipeline p : {ground_pso_, buildings_pso_, signs_pso_, sky_pso_, rain_pso_, traffic_pso_, streetlife_pso_,
-                         beacon_pso_, resolve_pso_, bloom_down_pso_,
+                         beacon_pso_, signs_glow_pso_, resolve_pso_, bloom_down_pso_,
                          bloom_up_pso_, tonemap_pso_})
         vkDestroyPipeline(dev, p, nullptr);
     vkDestroyPipeline(dev, hud_pso_, nullptr);
@@ -231,6 +237,8 @@ Renderer::~Renderer() {
     vk::destroy(ctx_, buildings_);
     vk::destroy(ctx_, signs_);
     vk::destroy(ctx_, road_field_);
+    vk::destroy(ctx_, sign_atlas_);
+    vk::destroy(ctx_, sign_strings_);
     vk::destroy(ctx_, road_staging_);
 }
 
@@ -277,16 +285,55 @@ void Renderer::create_static() {
         os.submit_and_wait();
     }
 
+    // Sign text: SDF glyph atlas + string table (static for the app's lifetime).
+    {
+        namespace st = signtext;
+        sign_atlas_ = vk::create_image(ctx_, {st::kAtlasWidth, st::kAtlasHeight}, VK_FORMAT_R8_UNORM,
+                                       VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
+        vk::Buffer staging = vk::create_buffer(ctx_, assets::sign_font_sdf.size(), VK_BUFFER_USAGE_TRANSFER_SRC_BIT, true);
+        std::memcpy(staging.mapped, assets::sign_font_sdf.data(), assets::sign_font_sdf.size());
+        vk::OneShot os(ctx_);
+        vk::transition(ctx_, os.cmd(), {sign_atlas_.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                        VK_PIPELINE_STAGE_2_NONE, 0, VK_PIPELINE_STAGE_2_COPY_BIT,
+                                        VK_ACCESS_2_TRANSFER_WRITE_BIT});
+        VkBufferImageCopy copy{};
+        copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        copy.imageExtent = {st::kAtlasWidth, st::kAtlasHeight, 1};
+        vkCmdCopyBufferToImage(os.cmd(), staging.buffer, sign_atlas_.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+        vk::transition(ctx_, os.cmd(), {sign_atlas_.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_PIPELINE_STAGE_2_COPY_BIT,
+                                        VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                                        VK_ACCESS_2_SHADER_SAMPLED_READ_BIT});
+        os.submit_and_wait();
+        vk::destroy(ctx_, staging);
+
+        // GPU layout per string (uvec4): x,y,z = 12 glyph bytes, w = length | japanese << 8.
+        constexpr std::size_t kCount = std::size(st::kStrings);
+        sign_strings_ = vk::create_buffer(ctx_, kCount * 16, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
+        auto* words = static_cast<std::uint32_t*>(sign_strings_.mapped);
+        for (std::size_t i = 0; i < kCount; ++i) {
+            const auto& e = st::kStrings[i];
+            for (int w = 0; w < 3; ++w) {
+                std::uint32_t v = 0;
+                for (int k = 0; k < 4; ++k) v |= std::uint32_t{e.glyphs[w * 4 + k]} << (8 * k);
+                words[i * 4 + static_cast<std::size_t>(w)] = v;
+            }
+            words[i * 4 + 3] = e.length | (e.japanese ? 0x100u : 0u);
+        }
+    }
+
     // Descriptor set layouts.
     {
-        VkDescriptorSetLayoutBinding b[4]{};
+        VkDescriptorSetLayoutBinding b[6]{};
         const VkShaderStageFlags vf = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
         b[0] = {0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 1, vf, nullptr};
         b[1] = {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, vf, nullptr};
         b[2] = {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, vf, nullptr};
         b[3] = {3, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, vf, nullptr};  // vertex: arterial culling
+        b[4] = {4, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};  // glyph atlas
+        b[5] = {5, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};          // sign strings
         VkDescriptorSetLayoutCreateInfo ci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-        ci.bindingCount = 4;
+        ci.bindingCount = 6;
         ci.pBindings = b;
         VK_CHECK(vkCreateDescriptorSetLayout(dev, &ci, nullptr, &scene_set_layout_));
     }
@@ -317,8 +364,8 @@ void Renderer::create_static() {
     // Scene set lives in a pool that survives resizes.
     {
         VkDescriptorPoolSize sizes[] = {{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 1},
-                                        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 2},
-                                        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1}};
+                                        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 3},
+                                        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2}};
         VkDescriptorPoolCreateInfo ci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
         ci.maxSets = 1;
         ci.poolSizeCount = 3;
@@ -394,7 +441,9 @@ void Renderer::write_scene_set() {
     VkDescriptorBufferInfo bld{buildings_.buffer, 0, VK_WHOLE_SIZE};
     VkDescriptorBufferInfo sgn{signs_.buffer, 0, VK_WHOLE_SIZE};
     VkDescriptorImageInfo road{linear_clamp_, road_field_.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-    VkWriteDescriptorSet w[4]{};
+    VkDescriptorImageInfo atlas{linear_clamp_, sign_atlas_.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    VkDescriptorBufferInfo strings{sign_strings_.buffer, 0, VK_WHOLE_SIZE};
+    VkWriteDescriptorSet w[6]{};
     for (auto& x : w) {
         x.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         x.dstSet = scene_set_;
@@ -412,7 +461,13 @@ void Renderer::write_scene_set() {
     w[3].dstBinding = 3;
     w[3].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     w[3].pImageInfo = &road;
-    vkUpdateDescriptorSets(ctx_.device(), 4, w, 0, nullptr);
+    w[4].dstBinding = 4;
+    w[4].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    w[4].pImageInfo = &atlas;
+    w[5].dstBinding = 5;
+    w[5].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    w[5].pBufferInfo = &strings;
+    vkUpdateDescriptorSets(ctx_.device(), 6, w, 0, nullptr);
 }
 
 void Renderer::ensure_buffer(vk::Buffer& b, VkDeviceSize size) {
@@ -473,6 +528,11 @@ void Renderer::create_pipelines() {
     d.vs = sh::beacon_vert;
     d.fs = sh::beacon_frag;
     beacon_pso_ = make_pipeline(ctx_, d);
+
+    d.vs = sh::signs_vert;
+    d.fs = sh::signs_glow_frag;
+    d.depth_op = VK_COMPARE_OP_GREATER_OR_EQUAL;
+    signs_glow_pso_ = make_pipeline(ctx_, d);
 
     PipelineDesc p;
     p.layout = post_layout_;
@@ -762,6 +822,11 @@ void Renderer::record(VkCommandBuffer cmd, std::uint32_t slot, const Game& game,
         vkCmdDraw(cmd, 3, 1, 0, 0);
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, beacon_pso_);
         vkCmdDraw(cmd, 12, 1, 0, 0);
+        if (sign_count_) {
+            // Free-standing neon lettering, additive over whatever is behind it.
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, signs_glow_pso_);
+            vkCmdDraw(cmd, 6, sign_count_, 0, 0);
+        }
         if (settings_.rain > 0.0f) {
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, rain_pso_);
             vkCmdDraw(cmd, 6, 6000, 0, 0);
@@ -801,7 +866,7 @@ void Renderer::record(VkCommandBuffer cmd, std::uint32_t slot, const Game& game,
                                        kAnyFragmentWork, 0, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
                                        VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT});
             const float push[4] = {1.0f / static_cast<float>(src_extent.width),
-                                   1.0f / static_cast<float>(src_extent.height), i == 0 ? 1.0f : 0.0f, 1.0f};
+                                   1.0f / static_cast<float>(src_extent.height), i == 0 ? 1.0f : 0.0f, 0.8f};
             fullscreen_pass(cmd, bloom_[i].view, bloom_[i].extent, bloom_down_pso_, bloom_down_sets_[i], slot, push,
                             sizeof(push), false);
             vk::transition(ctx_, cmd, {bloom_[i].image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,

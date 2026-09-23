@@ -22,6 +22,12 @@ struct Sign {
 layout(set = 0, binding = 1, std430) readonly buffer Buildings { Building buildings[]; };
 layout(set = 0, binding = 2, std430) readonly buffer Signs { Sign signs[]; };
 layout(set = 0, binding = 3) uniform sampler2D road_field_tex;
+layout(set = 0, binding = 4) uniform sampler2D sign_atlas;          // SDF glyphs, 16 x 9 cells
+layout(set = 0, binding = 5, std430) readonly buffer SignStrings { uvec4 sign_strings[]; };
+
+const vec2 kAtlasCells = vec2(16.0, 9.0);  // signtext::kCols / kRows (static_assert in renderer.cpp)
+const float kGlyphSdfScale = 0.25;         // (2 * kSpread) / kCell: SDF units -> cell units
+const uint kGlyphChoonpu = 44u;            // signtext::kGlyphChoonpu
 
 const float PI = 3.14159265;
 
@@ -59,37 +65,62 @@ float fbm(vec2 p)
     return s;
 }
 
-// Neon palette: saturated, HDR-friendly primaries of the genre.
+// Neon palette, weighted towards the reds and pinks that dominate the target look,
+// with cyan as the cool counterpoint.
 vec3 neon_color(uint h)
 {
-    const vec3 palette[8] = vec3[8](
-        vec3(1.00, 0.10, 0.55),  // hot magenta
-        vec3(0.05, 0.85, 1.00),  // cyan
-        vec3(1.00, 0.85, 0.10),  // sodium yellow
-        vec3(1.00, 0.18, 0.12),  // red
-        vec3(0.55, 0.20, 1.00),  // violet
-        vec3(0.20, 1.00, 0.45),  // acid green
-        vec3(1.00, 0.45, 0.05),  // orange
-        vec3(0.25, 0.45, 1.00)); // electric blue
-    return palette[h & 7u];
+    const vec3 palette[16] = vec3[16](
+        vec3(1.00, 0.07, 0.10), vec3(1.00, 0.07, 0.10), vec3(1.00, 0.10, 0.08), vec3(1.00, 0.16, 0.12),  // reds
+        vec3(1.00, 0.12, 0.45), vec3(1.00, 0.10, 0.35), vec3(1.00, 0.25, 0.55),                         // hot pinks
+        vec3(0.85, 0.10, 1.00),                                                                          // magenta
+        vec3(0.05, 0.85, 1.00), vec3(0.15, 0.95, 0.95), vec3(0.10, 0.65, 1.00),                         // cyans
+        vec3(1.00, 0.40, 0.06), vec3(1.00, 0.55, 0.12),                                                  // oranges
+        vec3(1.00, 0.82, 0.68),                                                                          // warm white
+        vec3(0.25, 0.45, 1.00),                                                                          // electric blue
+        vec3(1.00, 0.85, 0.15));                                                                         // yellow
+    return palette[h & 15u];
+}
+
+// ---- Sign text (SDF atlas) ----
+uint sign_string_length(uint id) { return sign_strings[id].w & 0xFFu; }
+bool sign_string_japanese(uint id) { return (sign_strings[id].w & 0x100u) != 0u; }
+uint sign_string_glyph(uint id, uint i)
+{
+    uvec4 s = sign_strings[id];
+    uint word = i < 4u ? s.x : (i < 8u ? s.y : s.z);
+    return (word >> ((i & 3u) * 8u)) & 0xFFu;
+}
+
+// Signed distance to glyph g's outline in cell units (+ inside), uv in [0,1]^2 (y down).
+// Outside the cell the glyph is treated as empty.
+float glyph_distance(uint g, vec2 uv)
+{
+    if (g == 0u || any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0)))) return -1.0;
+    vec2 cell = vec2(float(g % 16u), float(g / 16u));
+    float d = texture(sign_atlas, (cell + clamp(uv, vec2(0.01), vec2(0.99))) / kAtlasCells).r;
+    return (d - 0.5) * kGlyphSdfScale;
+}
+
+// Fraction of light lost to fog between the camera and world_pos (see apply_fog).
+float fog_amount(vec3 world_pos)
+{
+    vec3 cam = frame.camera_pos.xyz;
+    vec3 d = world_pos - cam;
+    float falloff = frame.fog.y;
+    float base = exp(-falloff * max(cam.z, 0.0));
+    float integral = abs(d.z) > 1e-3 ? base * (1.0 - exp(-falloff * d.z)) / (falloff * d.z) : base;
+    return min(1.0 - exp(-frame.fog.x * length(d) * integral), frame.fog.z);
 }
 
 // Exponential height fog with sky-coloured in-scattering. Heavy on purpose: it hides
 // the streaming radius and gives the neon something to glow through.
 vec3 apply_fog(vec3 color, vec3 world_pos)
 {
-    vec3 cam = frame.camera_pos.xyz;
-    vec3 d = world_pos - cam;
-    float dist = length(d);
-    float density = frame.fog.x;
-    float falloff = frame.fog.y;
     // Analytic integral of density * exp(-falloff * z) along the ray.
-    float dz = d.z;
-    float base = exp(-falloff * max(cam.z, 0.0));
-    float integral = abs(dz) > 1e-3 ? base * (1.0 - exp(-falloff * dz)) / (falloff * dz) : base;
-    float amount = 1.0 - exp(-density * dist * integral);
-    amount = min(amount, frame.fog.z);
-    vec3 in_scatter = sky_color(normalize(d)) * 1.6;
+    vec3 d = world_pos - frame.camera_pos.xyz;
+    float amount = fog_amount(world_pos);
+    // Teal haze from the sky, warmed by neon close to street level.
+    vec3 in_scatter = sky_color(normalize(d)) * 1.6 + vec3(0.07, 0.012, 0.022) * exp(-max(world_pos.z, 0.0) / 22.0);
     return mix(color, in_scatter, amount);
 }
 

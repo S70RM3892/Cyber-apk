@@ -45,10 +45,10 @@ find_program(APEX_GLSLANG glslangValidator)
 set(APEX_SHADERS
     buildings.vert buildings.frag ground.vert ground.frag signs.vert signs.frag
     fullscreen.vert sky.frag rain.vert rain.frag traffic.vert traffic.frag hud.vert hud.frag
-    streetlife.vert streetlife.frag beacon.vert beacon.frag
+    streetlife.vert streetlife.frag beacon.vert beacon.frag signs_glow.frag
     resolve.frag bloom_down.frag bloom_up.frag tonemap.frag
 )
-file(GLOB APEX_SHADER_INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}/shaders/include/*.glsl)
+file(GLOB APEX_SHADER_INCLUDES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/shaders/include/*.glsl)
 set(APEX_SPV_DIR ${CMAKE_CURRENT_BINARY_DIR}/spv)
 set(APEX_SPVS)
 foreach(s IN LISTS APEX_SHADERS)
@@ -74,7 +74,14 @@ add_custom_command(OUTPUT ${APEX_SHADER_HEADER}
             -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed_spirv.cmake
     DEPENDS ${APEX_SPVS} ${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed_spirv.cmake
     COMMENT "Embedding SPIR-V" VERBATIM)
-add_custom_target(apex_shaders DEPENDS ${APEX_SHADER_HEADER})
+set(APEX_FONT_HEADER ${CMAKE_CURRENT_BINARY_DIR}/generated/sign_font_sdf.hpp)
+add_custom_command(OUTPUT ${APEX_FONT_HEADER}
+    COMMAND ${CMAKE_COMMAND} -DINPUT=${CMAKE_CURRENT_SOURCE_DIR}/assets/sign_font_sdf.bin
+            -DOUTPUT=${APEX_FONT_HEADER} -DNAME=sign_font_sdf
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed_binary.cmake
+    DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/assets/sign_font_sdf.bin ${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed_binary.cmake
+    COMMENT "Embedding sign font atlas" VERBATIM)
+add_custom_target(apex_shaders DEPENDS ${APEX_SHADER_HEADER} ${APEX_FONT_HEADER})
 
 # ---- Renderer (Vulkan 1.3) ----
 find_package(Vulkan QUIET)

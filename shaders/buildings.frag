@@ -43,14 +43,14 @@ void main()
     float t = frame.camera_pos.w;
     vec3 view_dir = normalize(p - frame.camera_pos.xyz);
 
-    vec3 base_albedo = mix(vec3(0.030, 0.032, 0.040), vec3(0.065, 0.060, 0.055), hash_f(seed ^ 0x1234u));
+    vec3 base_albedo = mix(vec3(0.026, 0.034, 0.038), vec3(0.050, 0.052, 0.050), hash_f(seed ^ 0x1234u));
     vec3 color;
     vec3 emissive = vec3(0.0);
 
     // Ambient: dark sky from above + coloured street glow from below.
     float street_glow = exp(-max(p.z, 0.0) / 14.0);
     vec3 glow_tint = mix(neon_color(hash_u(seed)), neon_color(hash_u(seed + 7u)), 0.5);
-    vec3 ambient = vec3(0.010, 0.012, 0.025) + glow_tint * street_glow * 0.12;
+    vec3 ambient = vec3(0.008, 0.014, 0.017) + (glow_tint * 0.6 + vec3(0.4, 0.05, 0.08)) * street_glow * 0.12;
 
     if (n.z > 0.5) {
         // Roofs: dark, with scattered equipment lights and a lit parapet edge.
@@ -70,7 +70,7 @@ void main()
 
         uint style = district == 1u ? 1u : district == 0u ? 2u : 0u;
         float floor_h = district == 2u ? 3.1 : 3.8;
-        float pitch = style == 2u ? 1.6 : mix(2.0, 3.4, hash_f(seed ^ 0xa5u));
+        float pitch = style == 2u ? 1.6 : mix(1.8, 2.6, hash_f(seed ^ 0xa5u));
         vec2 grid = vec2(u / pitch, v / floor_h);
         vec2 cell = floor(grid);
         vec2 f = fract(grid);
@@ -82,29 +82,37 @@ void main()
         uint floor_hash = hash_u2(uvec2(uint(int(cell.y) + 4096), face_seed));
         vec3 windows;
         float glass;
+        vec3 extra_albedo = vec3(0.0);
         if (style == 1u) {
             // Curtain wall: continuous glass, whole office floors lit or dark.
             float slab = 1.0 - aa_box(f.y, 0.0, 0.18, fw.y);
             float mullion = aa_box(fract(u / 1.5), 0.04, 0.96, fwidth(u / 1.5));
             glass = slab * mullion;
-            float floor_lit = step(hash_f(floor_hash), 0.35);
+            float floor_lit = step(hash_f(floor_hash), 0.25);
             float bay_lit = step(hash_f(cell_hash), 0.75);
             vec3 office = mix(vec3(0.75, 0.88, 1.0), vec3(1.0, 0.85, 0.65), step(0.7, hash_f(floor_hash ^ 3u)));
             // Interior read: bright ceiling fixtures near the top of the floor, darker
             // desks/partitions below, fixture rows every 3 m.
             float ceiling = mix(0.25, 1.0, smoothstep(0.45, 0.95, f.y));
             float fixtures = mix(0.6, 1.0, aa_box(fract(u / 3.0), 0.2, 0.8, fwidth(u / 3.0)));
-            vec3 near_w = glass * floor_lit * bay_lit * office * ceiling * fixtures * 0.45;
-            windows = mix(near_w, office * 0.35 * 0.75 * 0.82 * 0.5 * 0.45, far_blend);
+            vec3 near_w = glass * floor_lit * bay_lit * office * ceiling * fixtures * 0.3;
+            windows = mix(near_w, office * 0.25 * 0.75 * 0.82 * 0.5 * 0.3, far_blend);
         } else {
-            float wx0 = style == 2u ? 0.2 : 0.16, wy0 = style == 2u ? 0.3 : 0.24;
-            glass = aa_box(f.x, wx0, 1.0 - wx0, fw.x) * aa_box(f.y, wy0, 0.84, fw.y);
-            float occupancy = style == 2u ? 0.42 : district == 2u ? 0.34 : 0.10;
+            float wx0 = style == 2u ? 0.2 : 0.22, wy0 = style == 2u ? 0.3 : 0.32;
+            glass = aa_box(f.x, wx0, 1.0 - wx0, fw.x) * aa_box(f.y, wy0, 0.80, fw.y);
+            // Air-conditioner units under some windows: small light-grey boxes with a fan.
+            if (style == 0u && hash_f(cell_hash ^ 0xacu) < 0.35) {
+                float ac = aa_box(f.x, 0.52, 0.86, fw.x) * aa_box(f.y, 0.05, 0.24, fw.y);
+                vec2 fan = (f - vec2(0.69, 0.145)) * vec2(pitch, floor_h);
+                float blades = 0.75 + 0.25 * smoothstep(0.1, 0.08, length(fan));
+                extra_albedo += ac * vec3(0.10, 0.11, 0.11) * blades * (1.0 - far_blend);
+            }
+            float occupancy = style == 2u ? 0.34 : district == 2u ? 0.26 : 0.08;
             float lit = step(hash_f(cell_hash), occupancy);
             float flicker = hash_f(cell_hash ^ 0x9e37u) < 0.04 ? 0.6 + 0.4 * sin(t * 13.0 + float(cell_hash & 255u)) : 1.0;
             float blind = mix(0.3, 1.0, smoothstep(0.84, 0.4, f.y));
-            vec3 wl = window_light(cell_hash) * (0.25 + 0.5 * hash_f(cell_hash ^ 0x77u)) * blind * flicker;
-            float coverage = (1.0 - 2.0 * wx0) * (0.84 - wy0);
+            vec3 wl = window_light(cell_hash) * (0.15 + 0.4 * hash_f(cell_hash ^ 0x77u)) * blind * flicker;
+            float coverage = (1.0 - 2.0 * wx0) * (0.80 - wy0);
             windows = mix(glass * lit * wl, vec3(0.8, 0.62, 0.48) * occupancy * coverage * 0.6, far_blend);
         }
 
@@ -116,13 +124,14 @@ void main()
         // Interior: bright top, shelves/counter silhouettes lower down.
         float shelves = 1.0 - 0.7 * aa_box(fract(v / 0.9), 0.0, 0.18, fwidth(v / 0.9)) * step(v, 2.6);
         float interior = mix(0.35, 1.0, smoothstep(0.5, 3.4, v)) * shelves;
-        vec3 shop_light = mix(vec3(1.0, 0.85, 0.7), neon_color(shop_hash), 0.6) * 0.5 * shop_open * interior;
+        vec3 shop_light = mix(vec3(1.0, 0.8, 0.65), neon_color(shop_hash), 0.75) * 0.16 * shop_open * interior;
         // Neon strip over the shopfront.
         float strip_on = step(0.45, hash_f(shop_hash ^ 0x2du));
         float shop_strip = aa_box(v, 3.95, 4.2, fwidth(v)) * aa_box(fract(u / 6.0), 0.1, 0.9, fwidth(u / 6.0));
         emissive += shop_strip * strip_on * neon_color(shop_hash ^ 0x2du) * 10.0 * (base_z < 0.5 ? 1.0 : 0.0);
 
-        vec3 glass_refl = sky_color(reflect(view_dir, n)) * 0.8;
+        // Dark tinted glass: a faint teal sheen, not a mirror of the red horizon haze.
+        vec3 glass_refl = vec3(0.010, 0.020, 0.024) * (0.6 + 0.8 * pow(1.0 - abs(dot(view_dir, n)), 3.0));
         emissive += (1.0 - shop) * (windows + glass * glass_refl * (1.0 - far_blend));
         emissive += shop * shop_win * shop_light;
 
@@ -150,7 +159,7 @@ void main()
         }
 
         float panel = 0.85 + 0.3 * hash_f3(uvec3(ucell(cell), seed));
-        color = base_albedo * panel * ambient * 5.0 * (1.0 - glass * 0.6);
+        color = (base_albedo * panel + extra_albedo) * ambient * 5.0 * (1.0 - glass * 0.6);
     }
 
     out_color = vec4(apply_fog(color + emissive, p), 1.0);

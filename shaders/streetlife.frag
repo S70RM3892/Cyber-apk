@@ -27,7 +27,7 @@ void main()
         if (part == 2u) {
             vec4 lc = unpackUnorm4x8(in_seed);
             // Downward-facing diffuser glows; the housing stays dark.
-            emissive = n.z < -0.5 ? lc.rgb * 12.0 * lc.a : vec3(0.0);
+            emissive = n.z < -0.5 ? lc.rgb * 5.0 * lc.a : vec3(0.0);
         }
     } else {
         uint h = in_seed;

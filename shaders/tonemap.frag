@@ -64,6 +64,11 @@ void main()
 
     c += texture(bloom, uv).rgb * params.bloom_strength;
     c *= params.exposure;
+
+    // Grade: teal shadows, warm highlights, a little extra saturation.
+    float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
+    c *= mix(vec3(0.80, 1.0, 1.10), vec3(1.07, 0.97, 0.93), smoothstep(0.02, 0.7, l));
+    c = max(mix(vec3(l), c, 1.18), vec3(0.0));
     c = aces(c);
 
     c *= mix(1.0, 0.55, smoothstep(0.15, 0.75, r2 * 2.0));  // vignette

@@ -25,7 +25,7 @@ struct RenderSettings {
     float gpu_budget_ms = 13.0f;  // leaves headroom inside a 16.6 ms vsync interval
     int ssr_steps = 24;
     float exposure = 1.5f;
-    float bloom_strength = 0.9f;
+    float bloom_strength = 1.15f;
     float rain = 1.0f;
     float fog_density = 0.0045f;
     std::uint32_t traffic_count = 580;     // first 320 fly (traffic.vert kAirCount), the rest drive
@@ -93,6 +93,8 @@ private:
     vk::Buffer buildings_, signs_;
     std::uint32_t building_count_ = 0, sign_count_ = 0;
     vk::Image road_field_;
+    vk::Image sign_atlas_;   // SDF glyphs for neon text (assets/sign_font_sdf.bin)
+    vk::Buffer sign_strings_;  // string table: glyph indices per sign string
     vk::Buffer road_staging_;
     std::array<float, 4> road_params_{};
     bool road_field_ready_ = false;
@@ -113,7 +115,8 @@ private:
     VkPipelineLayout post_layout_ = VK_NULL_HANDLE;
     VkPipeline ground_pso_ = VK_NULL_HANDLE, buildings_pso_ = VK_NULL_HANDLE, signs_pso_ = VK_NULL_HANDLE,
                sky_pso_ = VK_NULL_HANDLE, rain_pso_ = VK_NULL_HANDLE, traffic_pso_ = VK_NULL_HANDLE,
-               streetlife_pso_ = VK_NULL_HANDLE, beacon_pso_ = VK_NULL_HANDLE;
+               streetlife_pso_ = VK_NULL_HANDLE, beacon_pso_ = VK_NULL_HANDLE,
+               signs_glow_pso_ = VK_NULL_HANDLE;
     VkPipeline resolve_pso_ = VK_NULL_HANDLE, bloom_down_pso_ = VK_NULL_HANDLE, bloom_up_pso_ = VK_NULL_HANDLE,
                tonemap_pso_ = VK_NULL_HANDLE;
 
