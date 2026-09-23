@@ -25,6 +25,7 @@ add_library(apex_core
     engine/src/citygen.cpp
     engine/src/world.cpp
     engine/src/buildgen.cpp
+    engine/src/hero.cpp
     engine/src/materials.cpp
     engine/src/game.cpp
     engine/src/hud.cpp

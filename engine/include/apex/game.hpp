@@ -47,7 +47,7 @@ enum class PlayerMode { OnFoot, Driving };
 struct Camera {
     Vec3 position;
     float yaw = 0, pitch = 0;  // yaw 0 = +X (east), counter-clockwise; pitch + = up
-    float fov_y = 1.13f;       // ~65 degrees
+    float fov_y = 0.9f;        // ~52 degrees vertical: 80 horizontal at 16:9
     float znear = 0.1f;
 
     Vec3 forward() const;

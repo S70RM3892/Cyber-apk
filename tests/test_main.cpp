@@ -384,6 +384,7 @@ void test_collision() {
         const Vec3 pos = game.player_position();
         for (const BuildingInstance& b : game.world().snapshot()->buildings) {
             if (b.base_z > 1.0f || b.height < 1.0f) continue;
+            if (pos.z >= b.height - 0.01f) continue;  // standing on its roof (the spawn is on one)
             const float half = b.footprint * 0.5f;
             const bool inside = std::fabs(pos.x - b.x) < half && std::fabs(pos.y - b.y) < half;
             CHECK(!inside);
@@ -417,6 +418,7 @@ void test_gigs() {
 
 void test_jump() {
     Game game(1);
+    const float floor_z = game.feet_height();  // the spawn roof
     Input in;
     in.jump = true;
     game.update(1.0f / 60.0f, in);
@@ -424,11 +426,11 @@ void test_jump() {
     float peak = 0.0f;
     for (int i = 0; i < 120; ++i) {
         game.update(1.0f / 60.0f, in);
-        peak = std::max(peak, game.camera().position.z - Game::kEyeHeight);
+        peak = std::max(peak, game.camera().position.z - Game::kEyeHeight - floor_z);
     }
     CHECK(peak > 0.8f && peak < 1.5f);  // v^2 / 2g = 36 / 32 = 1.125 m
     CHECK(game.on_ground());
-    CHECK(near(game.camera().position.z, Game::kEyeHeight));
+    CHECK(near(game.camera().position.z, floor_z + Game::kEyeHeight));
 }
 
 void test_rooftops() {

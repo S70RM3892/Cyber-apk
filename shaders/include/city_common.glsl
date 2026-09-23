@@ -164,8 +164,9 @@ vec3 apply_fog(vec3 color, vec3 world_pos)
     // Teal-grey smog (the sky's red horizon band is left out: fog shouldn't turn pink),
     // with a little neon warmth right at street level.
     vec3 dir = normalize(d);
-    vec3 smog = mix(vec3(0.036, 0.042, 0.046), vec3(0.012, 0.020, 0.025), clamp(dir.z * 2.0, 0.0, 1.0));
-    vec3 in_scatter = smog * 0.75 + vec3(0.04, 0.007, 0.008) * exp(-max(world_pos.z, 0.0) / 15.0);
+    // Lit from below by the whole city: distant towers sink into a visible teal haze.
+    vec3 smog = mix(vec3(0.040, 0.066, 0.074), vec3(0.012, 0.022, 0.028), clamp(dir.z * 2.0, 0.0, 1.0));
+    vec3 in_scatter = smog + vec3(0.025, 0.005, 0.006) * exp(-max(world_pos.z, 0.0) / 15.0);
     // Dusk: bright blue-grey aerial haze, warm towards the sun (forward scattering), so
     // distant towers fade into pale blue silhouettes.
     float toward_sun = pow(max(dot(dir, frame.sun.xyz), 0.0), 6.0);

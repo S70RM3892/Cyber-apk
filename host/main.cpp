@@ -89,7 +89,8 @@ struct Args {
     int frames = 30;
     std::uint64_t seed = 2077;
     bool has_pos = false;
-    float x = 0, y = 0, yaw = 0, pitch = 0.08f;
+    float x = 0, y = 0;
+    std::optional<float> yaw, pitch;  // default: the spawn view
     float walk_seconds = 0;
     float scale = 0.67f;
     bool validation = true;
@@ -98,6 +99,7 @@ struct Args {
     bool hud_stick = false;
     bool perf = false;  // show the FPS / GPU readout in the HUD
     bool dusk = false;  // hazy dusk instead of rainy night
+    float rain = 1.0f;
     bool face_gig = false;
     float drive_seconds = 0;
     int traffic = -1;
@@ -129,6 +131,7 @@ Args parse(int argc, char** argv) {
         else if (k == "--hud-stick") a.hud_stick = true;
         else if (k == "--perf") a.perf = true;
         else if (k == "--dusk") a.dusk = true;
+        else if (k == "--rain") a.rain = std::stof(next());
         else if (k == "--face-gig") a.face_gig = true;
         else if (k == "--drive") a.drive_seconds = std::stof(next());
         else if (k == "--traffic") a.traffic = std::stoi(next());
@@ -165,6 +168,7 @@ int run_present(const Args& args) {
     RenderSettings settings;
     settings.render_scale = args.scale;
     settings.daylight = args.dusk ? 1.0f : 0.0f;
+    settings.rain = args.rain;
     Renderer renderer(ctx, format, presenter.logical_extent(), settings);
     load_materials(renderer);
 
@@ -238,8 +242,8 @@ int main(int argc, char** argv) {
     ctx.create_device(desc);
 
     Game game(args.seed);
-    game.camera().yaw = args.yaw;
-    game.camera().pitch = args.pitch;
+    if (args.yaw) game.camera().yaw = *args.yaw;
+    if (args.pitch) game.camera().pitch = *args.pitch;
     if (args.has_pos) game.set_foot_position({args.x, args.y, 0.0f});
     if (args.on_roof) {
         game.world().update(game.player_position());
@@ -263,6 +267,7 @@ int main(int argc, char** argv) {
     RenderSettings settings;
     settings.render_scale = args.scale;
     settings.daylight = args.dusk ? 1.0f : 0.0f;
+    settings.rain = args.rain;
     settings.dynamic_resolution = false;  // deterministic screenshots
     if (args.traffic >= 0) settings.traffic_count = static_cast<std::uint32_t>(args.traffic);
     if (args.peds >= 0) settings.pedestrian_count = static_cast<std::uint32_t>(args.peds);

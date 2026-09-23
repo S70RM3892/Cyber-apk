@@ -106,9 +106,39 @@ float ad_text(uint text, vec2 uv, vec4 box, vec2 size, bool vertical)
     return text_distance(text, along, across, true);
 }
 
+const uint kSaleString = kJapaneseStrings + 24u;  // "SALE 35%"
+
+// Fashion poster (portrait): a leg in a glossy thigh-high boot on a pale cyan field,
+// brand name running up the side, sale band at the foot.
+vec3 fashion_ad(vec2 uv, uint h, uint text, float t, vec2 size)
+{
+    vec2 p = vec2((uv.x - 0.5) * size.x / size.y, uv.y);
+    vec3 col = mix(vec3(0.25, 0.8, 1.0), vec3(0.03, 0.4, 0.8), smoothstep(0.0, 1.0, uv.y * 0.8 + uv.x * 0.4));
+    p.x += 0.07;
+    float thigh = sd_capsule(p, vec2(0.2, -0.05), vec2(-0.01, 0.34), 0.08);
+    float boot = min(sd_capsule(p, vec2(-0.02, 0.3), vec2(-0.03, 0.74), 0.068),
+                     sd_capsule(p, vec2(-0.03, 0.76), vec2(0.13, 0.8), 0.035));
+    float heel = sd_capsule(p, vec2(-0.05, 0.78), vec2(-0.045, 0.9), 0.011);
+    boot = min(boot, heel);
+    col = mix(col, vec3(0.85, 0.62, 0.52) * (0.8 + 0.3 * smoothstep(0.05, -0.05, p.x)), smoothstep(0.005, -0.005, thigh));
+    vec3 leather = vec3(0.015, 0.012, 0.02) + vec3(0.9) * smoothstep(0.012, 0.0, abs(p.x + 0.035)) * step(p.y, 0.72) * 0.7;
+    col = mix(col, leather, smoothstep(0.005, -0.005, boot));
+    // Brand, rotated to read bottom-to-top along the right edge.
+    vec2 r = vec2(1.0 - uv.y, uv.x);
+    float d = ad_text(text, r, vec4(0.22, 0.66, 0.98, 0.95), size.yx, false);
+    col = mix(col, vec3(1.0, 0.1, 0.55), smoothstep(-0.02, 0.02, d));
+    // Sale band.
+    float band = step(0.84, uv.y) * step(uv.y, 0.97) * step(0.3, uv.x) * step(uv.x, 0.97);
+    col = mix(col, vec3(1.0, 0.85, 0.1), band);
+    float ds = ad_text(kSaleString, uv, vec4(0.34, 0.86, 0.94, 0.95), size, false);
+    col = mix(col, vec3(0.03, 0.02, 0.05), smoothstep(-0.02, 0.02, ds) * band);
+    return col;
+}
+
 // Procedural video advertisements (original, fictional brands). Every creative has one
 // clear subject and big readable text, so a viewer can say what it advertises.
-vec3 screen_ad(vec2 uv, uint seed, uint text, float t, vec2 size)
+// `forced` (style bits 24-31) pins one creative: 0 = cycle, else variant + 1.
+vec3 screen_ad(vec2 uv, uint seed, uint text, float t, vec2 size, uint forced)
 {
     // Cycle between creatives every 8 s with a top-down wipe.
     float slot = floor(t / 8.0 + hash_f(seed) * 7.0);
@@ -116,6 +146,11 @@ vec3 screen_ad(vec2 uv, uint seed, uint text, float t, vec2 size)
     if (phase < 0.05 && uv.y > phase / 0.05) slot -= 1.0;
     uint h = hash_u(seed ^ uint(slot) * 2654435761u);
     uint variant = h % 4u;
+    if (forced != 0u) {
+        h = hash_u(seed);
+        variant = forced - 1u;
+        if (variant == 4u) return fashion_ad(uv, h, text, t, size);
+    }
     vec3 c1 = ad_palette(h), c2 = ad_palette(h >> 3u), c3 = ad_palette(h >> 6u);
     if (all(equal(c1, c2))) c2 = ad_palette((h >> 3u) + 3u);
     vec2 p = vec2((uv.x - 0.5) * size.x / size.y, uv.y);  // aspect-correct, y down
@@ -195,6 +230,19 @@ void main()
     if (style == kNeonText) discard;
 #endif
 
+    // Seen from behind: panels, screens and billboards show their dark backs (not
+    // mirrored text); blades and free-standing neon read from both sides.
+    vec3 normal = vec3(cos(s.pos_yaw.w), sin(s.pos_yaw.w), 0.0);
+    bool back = dot(normal, frame.camera_pos.xyz - in_world_pos) < 0.0;
+#if !SIGN_GLOW_PASS
+    if (back && style != kBlade) {
+        out_color = vec4(apply_fog(vec3(0.012, 0.012, 0.014), in_world_pos), 1.0);
+        out_material = vec4(0.0, 1.0, 0.5, 0.5);
+        return;
+    }
+#endif
+    if (back && (style == kBlade || style == kNeonText)) uv.x = 1.0 - uv.x;
+
     uint zone = (s.style >> 16u) & 0xFFu;
     vec3 col = zone_color(zone, hash_u(h));
     vec3 col2 = zone_color(zone, hash_u(h ^ 0x51u));
@@ -223,12 +271,12 @@ void main()
         out_material = vec4(0.0);
         return;
     } else if (style == kScreen) {
-        vec3 img = screen_ad(uv, h, text, t, s.size);
+        vec3 img = screen_ad(uv, h, text, t, s.size, s.style >> 24u);
         // LED pixel structure up close, fading out once it's below a pixel.
         vec2 px = uv * s.size * 12.0;  // ~8 cm pixels
         float grid_fade = 1.0 - smoothstep(0.3, 0.7, max(fwidth(px.x), fwidth(px.y)));
         vec2 f = fract(px);
-        float cellmask = mix(1.0, smoothstep(0.0, 0.15, f.x) * smoothstep(0.0, 0.15, f.y) * 1.3, grid_fade);
+        float cellmask = mix(1.0, smoothstep(0.0, 0.15, f.x) * smoothstep(0.0, 0.15, f.y) * 1.3, grid_fade * 0.5);
         float scan = 0.92 + 0.08 * sin(uv.y * 300.0 - t * 20.0);
         float bezel = step(0.012, min(uv.x, 1.0 - uv.x)) * step(0.008, min(uv.y, 1.0 - uv.y));
         emissive = img * 1.3 * cellmask * scan * bezel;

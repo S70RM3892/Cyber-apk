@@ -156,7 +156,10 @@ void main()
                 wall_frame(n, t, b);
                 uv = vec2(u, v);
             }
-            TexSample ts = sample_material(layer, uv, metres, n, t, b, strength * (1.0 - s.glass));
+            // Corrugated sheet: its ridges carry the relief, the photo only tints it. Painted
+            // steel stays smooth (its chipped-paint photo reads as glitter under neon).
+            float relief = mat == kMatCorrugated ? 0.35 : mat == kMatMetal ? 0.4 : 1.0;
+            TexSample ts = sample_material(layer, uv, metres, n, t, b, strength * relief * (1.0 - s.glass));
             s.albedo *= ts.tint;
             shade_n = ts.normal;
             // Rougher texels dull the highlights, smooth ones sharpen them.
@@ -165,6 +168,10 @@ void main()
             s.shininess *= mix(1.0, gloss, strength);
             ambient = building_ambient(seed, p, shade_n);
         }
+    }
+    if (mat == kMatCorrugated && n.z > 0.5) {
+        // Tilt the shading normal across the ridges: long streak highlights down the sheet.
+        shade_n = normalize(shade_n + vec3(s.material.zw * 2.0 - 1.0, 0.0) * 1.6);
     }
     out_color = vec4(apply_fog(shade_surface(s, p, shade_n, view_dir, ambient), p), 1.0);
     out_material = s.material;

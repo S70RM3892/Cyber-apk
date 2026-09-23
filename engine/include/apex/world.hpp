@@ -40,7 +40,8 @@ struct SignInstance {
     float x, y, z, yaw;       // centre (metres), facing direction around +Z
     float width, height;      // metres
     std::uint32_t seed;
-    std::uint32_t style;      // bits 0-7 SignStyle, bits 8-15 string id (sign_text_data.hpp)
+    std::uint32_t style;      // bits 0-7 SignStyle, 8-15 string id (sign_text_data.hpp), 16-23 colour
+                              // zone, 24-31 screens: pinned creative + 1 (0 = cycle)
 
     SignStyle kind() const { return static_cast<SignStyle>(style & 0xFF); }
     std::uint32_t text() const { return (style >> 8) & 0xFF; }

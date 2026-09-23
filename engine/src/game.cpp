@@ -1,4 +1,5 @@
 #include "apex/game.hpp"
+#include "apex/hero.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -19,11 +20,12 @@ Game::Game(std::uint64_t seed) : seed_(seed), world_([seed] {
     p.seed = seed;
     return p;
 }()) {
-    world_.update({0, 0, 0});
-    world_.wait_ready();
-    const Vec3 spawn = world_.find_spawn({0, 0, 0});
-    foot_position_ = {spawn.x, spawn.y, 0.0f};
-    camera_.position = {spawn.x, spawn.y, kEyeHeight};
+    // Start on the rooftop of the hand-built spawn set, facing its view.
+    const Vec3 spawn = hero::to_world(0.0f, 0.0f, hero::kRoofZ);
+    foot_position_ = spawn;
+    camera_.position = {spawn.x, spawn.y, spawn.z + kEyeHeight};
+    camera_.yaw = hero::kHeading;
+    camera_.pitch = hero::kPitch;
     world_.update(camera_.position);
     world_.wait_ready();
     issue_gig();

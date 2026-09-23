@@ -1,6 +1,7 @@
 #include "apex/world.hpp"
 
 #include "apex/buildgen.hpp"
+#include "apex/hero.hpp"
 #include "apex/massing.hpp"
 #include "apex/sign_text_data.hpp"
 
@@ -27,6 +28,8 @@ Rgb zone_color(std::uint32_t zone, std::uint32_t h) {
 }
 
 std::uint32_t sign_zone(float x, float y) {
+    // Around the spawn set: red and cyan, the pair of its reference composition.
+    if (std::hypot(x - hero::kOriginX, y - hero::kOriginY) < 700.0f) return 0;
     // Zones follow a coarse 400 m grid, independent of the city seed so the mirror stays
     // simple; neighbouring cells hash to different pairs.
     const auto cx = static_cast<std::int64_t>(std::floor(x / 400.0f)), cy = static_cast<std::int64_t>(std::floor(y / 400.0f));
@@ -514,13 +517,21 @@ std::shared_ptr<const CitySnapshot> build_snapshot(const city::Params& p, std::i
             chunk.first_box = static_cast<std::uint32_t>(mesh.boxes.size());
             chunk.min[0] = chunk.min[1] = chunk.min[2] = 1e30f;
             chunk.max[0] = chunk.max[1] = chunk.max[2] = -1e30f;
-            for (const city::Building& b : city::generate_tile(p, tx, ty, tile_size)) {
+            // Procedural lots, minus those the spawn set replaces, plus its authored lots.
+            std::vector<hero::Lot> lots;
+            for (const city::Building& b : city::generate_tile(p, tx, ty, tile_size))
+                if (!hero::suppresses(b)) lots.push_back({b, true, {}});
+            for (const hero::Lot& l : hero::lots())
+                if (tile_of(l.building.x, tile_size) == tx && tile_of(l.building.y, tile_size) == ty) lots.push_back(l);
+            for (const hero::Lot& lot : lots) {
+                const city::Building& b = lot.building;
                 const auto first_box = static_cast<std::uint32_t>(snap->buildings.size());
                 add_building_boxes(b, snap->buildings);
                 for (std::size_t i = first_box; i < snap->buildings.size(); ++i)
                     snap->buildings[i].flags |= BuildingInstance::kMeshed;
                 const std::size_t first_sign = snap->signs.size();
-                place_signs(b, snap->signs);
+                if (lot.procedural_signs) place_signs(b, snap->signs);
+                snap->signs.insert(snap->signs.end(), lot.signs.begin(), lot.signs.end());
                 place_props(b, snap->props, snap->lights);
                 const float d = std::hypot(b.x - cx, b.y - cy);
                 build_building_mesh(b, first_box,
@@ -549,12 +560,21 @@ std::shared_ptr<const CitySnapshot> build_snapshot(const city::Params& p, std::i
             if (chunk.index_count || chunk.box_count) mesh.chunks.push_back(chunk);
         }
 
+    // The hand-built foreground of the spawn view, when it's in range.
+    {
+        const Vec3 o = hero::to_world(0.0f, 0.0f, 0.0f);
+        if (std::fabs(o.x - cx) < static_cast<float>(radius) * tile_size &&
+            std::fabs(o.y - cy) < static_cast<float>(radius) * tile_size)
+            hero::build(*snap);
+    }
+
     for (const SignInstance& s : snap->signs) {
         const PointLight l = sign_light(s);
         snap->point_lights.push_back(l);
         // Big signs and screens light up the smog in front of them.
         const float power = l.r + l.g + l.b;
-        if (power > 60.0f) {
+        // (Not the small ones: up close their haze would swamp the view.)
+        if (power > 60.0f && s.width * s.height >= 25.0f) {
             const float radius = std::clamp(std::sqrt(s.width * s.height) * 1.1f + 2.0f, 3.0f, 30.0f);
             const float k = 0.0008f / (radius * 0.1f + 1.0f);
             snap->halos.push_back({l.x, l.y, l.z, radius, l.r * k, l.g * k, l.b * k, 0.0f});
