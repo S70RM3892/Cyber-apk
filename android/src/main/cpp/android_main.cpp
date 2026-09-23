@@ -2,7 +2,7 @@
 //
 // Controls (landscape):
 //   left half   floating virtual stick: walk; push to the rim to sprint
-//   right half  drag to look around
+//   right half  drag to look around; JUMP button bottom-right
 //   keyboard    WASD + Shift, arrow keys to look (emulators / Chromebooks)
 #include <android/input.h>
 #include <android/keycodes.h>
@@ -16,6 +16,7 @@
 #include <memory>
 
 #include "apex/game.hpp"
+#include "apex/hud.hpp"
 #include "presenter.hpp"
 #include "renderer.hpp"
 
@@ -42,7 +43,10 @@ public:
             case AMOTION_EVENT_ACTION_POINTER_DOWN: {
                 const int32_t id = AMotionEvent_getPointerId(e, index);
                 const float x = AMotionEvent_getX(e, index), y = AMotionEvent_getY(e, index);
-                if (x < width_ * 0.5f && stick_id_ < 0) {
+                if (jump_button(width_, height_).contains(x, y)) {
+                    jump_id_ = id;
+                    jump_pending_ = true;
+                } else if (x < width_ * 0.5f && stick_id_ < 0) {
                     stick_id_ = id;
                     stick_origin_x_ = x;
                     stick_origin_y_ = y;
@@ -90,6 +94,7 @@ public:
                     sprint_ = false;
                 }
                 if (id == look_id_ || id == -2) look_id_ = -1;
+                if (id == jump_id_ || id == -2) jump_id_ = -1;
                 return true;
             }
             default:
@@ -110,6 +115,9 @@ public:
             case AKEYCODE_DPAD_DOWN: keys_[7] = down; return true;
             case AKEYCODE_SHIFT_LEFT:
             case AKEYCODE_SHIFT_RIGHT: keys_[8] = down; return true;
+            case AKEYCODE_SPACE:
+                if (down && AKeyEvent_getRepeatCount(e) == 0) jump_pending_ = true;
+                return true;
             default: return false;
         }
     }
@@ -125,12 +133,20 @@ public:
         in.look_dx = look_dx_ + (keys_[4] ? key_turn : 0.0f) - (keys_[5] ? key_turn : 0.0f);
         in.look_dy = look_dy_ + (keys_[6] ? key_turn : 0.0f) - (keys_[7] ? key_turn : 0.0f);
         look_dx_ = look_dy_ = 0.0f;
+        in.jump = jump_pending_;
+        jump_pending_ = false;
         return in;
     }
 
+    StickState stick() const {
+        return {stick_id_ >= 0, stick_origin_x_, stick_origin_y_, stick_x_, stick_y_, height_ * 0.12f};
+    }
+    bool jump_held() const { return jump_id_ >= 0; }
+
 private:
     float width_ = 1, height_ = 1;
-    int32_t stick_id_ = -1, look_id_ = -1;
+    int32_t stick_id_ = -1, look_id_ = -1, jump_id_ = -1;
+    bool jump_pending_ = false;
     float stick_origin_x_ = 0, stick_origin_y_ = 0, stick_x_ = 0, stick_y_ = 0;
     float look_last_x_ = 0, look_last_y_ = 0, look_dx_ = 0, look_dy_ = 0;
     bool sprint_ = false;
@@ -207,9 +223,23 @@ public:
         last_frame_ = now;
         game_->update(dt, controls_.consume(dt));
         world_dirty_ |= game_->take_world_dirty();
-        if (presenter_->frame(*game_, *renderer_, world_dirty_)) world_dirty_ = false;
+        fps_ = fps_ <= 0.0f ? 1.0f / std::max(dt, 1e-3f) : fps_ * 0.95f + 0.05f / std::max(dt, 1e-3f);
+
         const VkExtent2D extent = presenter_->logical_extent();
-        controls_.set_screen(static_cast<float>(extent.width), static_cast<float>(extent.height));
+        HudInput hi;
+        hi.width = static_cast<float>(extent.width);
+        hi.height = static_cast<float>(extent.height);
+        hi.fps = fps_;
+        hi.gpu_ms = renderer_->gpu_ms();
+        hi.render_scale = renderer_->settings().render_scale;
+        hi.stick = controls_.stick();
+        hi.jump_held = controls_.jump_held();
+        build_hud(hud_, *game_, hi);
+
+        if (presenter_->frame(*game_, *renderer_, world_dirty_, hud_.quads())) world_dirty_ = false;
+        renderer_->update_dynamic_resolution();
+        const VkExtent2D now_extent = presenter_->logical_extent();
+        controls_.set_screen(static_cast<float>(now_extent.width), static_cast<float>(now_extent.height));
     }
 
 private:
@@ -219,6 +249,8 @@ private:
     std::unique_ptr<Game> game_;
     std::unique_ptr<Renderer> renderer_;
     TouchControls controls_;
+    HudBuilder hud_;
+    float fps_ = 0.0f;
     bool focused_ = false;
     bool world_dirty_ = true;
     std::chrono::steady_clock::time_point last_frame_;

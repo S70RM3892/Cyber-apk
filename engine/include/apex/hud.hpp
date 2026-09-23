@@ -37,6 +37,7 @@ struct HudInput {
     float gpu_ms = 0;
     float render_scale = 1;
     StickState stick;
+    bool jump_held = false;
 };
 
 class HudBuilder {
@@ -54,7 +55,17 @@ private:
     std::vector<HudQuad> quads_;
 };
 
-// Lay out the game HUD (status panel, compass, crosshair, touch stick).
+// On-screen button geometry, shared by the HUD and the touch hit-test.
+struct HudButton {
+    float cx, cy, radius;
+    bool contains(float x, float y) const {
+        const float dx = x - cx, dy = y - cy;
+        return dx * dx + dy * dy <= radius * radius * 1.3f;  // a little forgiving
+    }
+};
+HudButton jump_button(float width, float height);
+
+// Lay out the game HUD (status panel, compass, gig tracker, crosshair, controls).
 void build_hud(HudBuilder& hud, const Game& game, const HudInput& in);
 
 // 5x7 glyph rows (bit 4 = leftmost pixel) for printable ASCII, or nullptr.

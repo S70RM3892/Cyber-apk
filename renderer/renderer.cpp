@@ -20,8 +20,9 @@ struct FrameUniforms {
     float road_field[4];
     float viewport[4];
     float fog[4];
+    float objective[4];
 };
-static_assert(sizeof(FrameUniforms) == 320);
+static_assert(sizeof(FrameUniforms) == 336);
 
 constexpr VkFormat kSceneColorFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
 constexpr VkFormat kMaterialFormat = VK_FORMAT_R8G8B8A8_UNORM;
@@ -200,7 +201,8 @@ Renderer::~Renderer() {
     VkDevice dev = ctx_.device();
     vkDeviceWaitIdle(dev);
     destroy_sized();
-    for (VkPipeline p : {ground_pso_, buildings_pso_, signs_pso_, sky_pso_, rain_pso_, traffic_pso_, streetlife_pso_, resolve_pso_, bloom_down_pso_,
+    for (VkPipeline p : {ground_pso_, buildings_pso_, signs_pso_, sky_pso_, rain_pso_, traffic_pso_, streetlife_pso_,
+                         beacon_pso_, resolve_pso_, bloom_down_pso_,
                          bloom_up_pso_, tonemap_pso_})
         vkDestroyPipeline(dev, p, nullptr);
     vkDestroyPipeline(dev, hud_pso_, nullptr);
@@ -459,6 +461,10 @@ void Renderer::create_pipelines() {
     d.blend = Blend::Additive;  // rain adds zero to the material target
     rain_pso_ = make_pipeline(ctx_, d);
 
+    d.vs = sh::beacon_vert;
+    d.fs = sh::beacon_frag;
+    beacon_pso_ = make_pipeline(ctx_, d);
+
     PipelineDesc p;
     p.layout = post_layout_;
     p.vs = sh::fullscreen_vert;
@@ -622,6 +628,11 @@ void Renderer::update_frame_ubo(std::uint32_t slot, const Game& game) {
     u.fog[1] = 0.018f;
     u.fog[2] = 0.97f;
     u.fog[3] = settings_.rain;
+    const Gig& gig = game.gig();
+    u.objective[0] = gig.target.x;
+    u.objective[1] = gig.target.y;
+    u.objective[2] = gig.elapsed;
+    u.objective[3] = 1.0f;
     std::memcpy(static_cast<char*>(frame_ubo_.mapped) + slot * ubo_stride_, &u, sizeof(u));
 }
 
@@ -735,6 +746,8 @@ void Renderer::record(VkCommandBuffer cmd, std::uint32_t slot, const Game& game,
         }
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, sky_pso_);
         vkCmdDraw(cmd, 3, 1, 0, 0);
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, beacon_pso_);
+        vkCmdDraw(cmd, 12, 1, 0, 0);
         if (settings_.rain > 0.0f) {
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, rain_pso_);
             vkCmdDraw(cmd, 6, 6000, 0, 0);

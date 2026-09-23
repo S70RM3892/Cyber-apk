@@ -2,6 +2,7 @@
 // the tools must build in a bare CI container.
 #include <cmath>
 #include <cstdio>
+#include <algorithm>
 #include <map>
 #include <numbers>
 #include <set>
@@ -227,6 +228,45 @@ void test_collision() {
     game.world().wait_ready();
 }
 
+void test_gigs() {
+    Game game(31337);
+    const Gig first = game.gig();
+    CHECK(first.index == 1);
+    const float dx = first.target.x - game.camera().position.x, dy = first.target.y - game.camera().position.y;
+    const float d = std::sqrt(dx * dx + dy * dy);
+    CHECK(d > 150.0f && d < 650.0f);
+    // Gig targets sit on lot-grid intersections (street crossings, never in a building).
+    const float b = game.world().params().block_size;
+    CHECK(near(std::fmod(std::fabs(first.target.x), b), 0.0f, 1e-2f) || near(std::fmod(std::fabs(first.target.x), b), b, 1e-2f));
+
+    Input idle;
+    game.update(0.016f, idle);
+    CHECK(game.credits() == 0);
+    game.camera().position = {first.target.x, first.target.y, Game::kEyeHeight};
+    game.update(0.016f, idle);
+    CHECK(game.gigs_completed() == 1);
+    CHECK(game.credits() >= static_cast<std::uint32_t>(first.reward * 0.99f));  // on time: full pay
+    CHECK(game.gig().index == 2);
+    CHECK(game.gig().target.x != first.target.x || game.gig().target.y != first.target.y);
+    game.world().wait_ready();
+}
+
+void test_jump() {
+    Game game(1);
+    Input in;
+    in.jump = true;
+    game.update(1.0f / 60.0f, in);
+    in.jump = false;
+    float peak = 0.0f;
+    for (int i = 0; i < 120; ++i) {
+        game.update(1.0f / 60.0f, in);
+        peak = std::max(peak, game.camera().position.z - Game::kEyeHeight);
+    }
+    CHECK(peak > 0.8f && peak < 1.5f);  // v^2 / 2g = 36 / 32 = 1.125 m
+    CHECK(game.on_ground());
+    CHECK(near(game.camera().position.z, Game::kEyeHeight));
+}
+
 }  // namespace
 
 int main() {
@@ -240,6 +280,8 @@ int main() {
     test_building_boxes();
     test_signs();
     test_collision();
+    test_gigs();
+    test_jump();
     if (g_failures == 0) std::puts("all tests passed");
     return g_failures == 0 ? 0 : 1;
 }

@@ -112,7 +112,7 @@ private:
     VkPipelineLayout post_layout_ = VK_NULL_HANDLE;
     VkPipeline ground_pso_ = VK_NULL_HANDLE, buildings_pso_ = VK_NULL_HANDLE, signs_pso_ = VK_NULL_HANDLE,
                sky_pso_ = VK_NULL_HANDLE, rain_pso_ = VK_NULL_HANDLE, traffic_pso_ = VK_NULL_HANDLE,
-               streetlife_pso_ = VK_NULL_HANDLE;
+               streetlife_pso_ = VK_NULL_HANDLE, beacon_pso_ = VK_NULL_HANDLE;
     VkPipeline resolve_pso_ = VK_NULL_HANDLE, bloom_down_pso_ = VK_NULL_HANDLE, bloom_up_pso_ = VK_NULL_HANDLE,
                tonemap_pso_ = VK_NULL_HANDLE;
 

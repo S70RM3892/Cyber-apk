@@ -12,6 +12,7 @@ layout(set = 0, binding = 0) uniform Frame {
     vec4 road_field;    // xy origin, z metres per texel, w extent (metres)
     vec4 viewport;      // internal w, h, 1/w, 1/h
     vec4 fog;           // x density, y height falloff, z max opacity, w rain intensity
+    vec4 objective;     // xy gig beacon position, z seconds since issued, w 1 = active
 } frame;
 
 #endif

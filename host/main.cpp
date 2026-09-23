@@ -77,6 +77,7 @@ struct Args {
     int present_frames = 0;
     bool hud = true;
     bool hud_stick = false;
+    bool face_gig = false;
 };
 
 Args parse(int argc, char** argv) {
@@ -99,6 +100,7 @@ Args parse(int argc, char** argv) {
         else if (k == "--present") a.present_frames = std::stoi(next());
         else if (k == "--no-hud") a.hud = false;
         else if (k == "--hud-stick") a.hud_stick = true;
+        else if (k == "--face-gig") a.face_gig = true;
         else std::fprintf(stderr, "unknown argument %s\n", k.c_str());
     }
     return a;
@@ -169,6 +171,10 @@ int main(int argc, char** argv) {
     game.camera().yaw = args.yaw;
     game.camera().pitch = args.pitch;
     if (args.has_pos) game.camera().position = {args.x, args.y, Game::kEyeHeight};
+    if (args.face_gig) {
+        const Vec3 d = game.gig().target - game.camera().position;
+        game.camera().yaw = std::atan2(d.y, d.x);
+    }
 
     const VkExtent2D extent{args.width, args.height};
     RenderSettings settings;

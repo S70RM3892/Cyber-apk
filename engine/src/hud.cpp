@@ -1,5 +1,6 @@
 #include "apex/hud.hpp"
 
+#include <algorithm>
 #include <cctype>
 #include <cmath>
 #include <cstdio>
@@ -94,6 +95,11 @@ float HudBuilder::text(std::string_view s, float x, float y, float px, float r, 
     return cx - x;
 }
 
+HudButton jump_button(float width, float height) {
+    const float u = height / 720.0f;
+    return {width - 24.0f * u - 90.0f * u, height - 24.0f * u - 150.0f * u, 56.0f * u};
+}
+
 void build_hud(HudBuilder& hud, const Game& game, const HudInput& in) {
     hud.clear();
     // Scale everything from a 720p-tall reference so the HUD is the same physical size
@@ -106,14 +112,16 @@ void build_hud(HudBuilder& hud, const Game& game, const HudInput& in) {
     const Camera& cam = game.camera();
     const city::DistrictSample ds = city::sample(game.world().params(), cam.position.x, cam.position.y);
     char line[64];
-    hud.rect(margin - 8 * u, margin - 8 * u, 330 * u, 78 * u, 0.0f, 0.0f, 0.0f, 0.45f);
-    hud.rect(margin - 8 * u, margin - 8 * u, 4 * u, 78 * u, kPink[0], kPink[1], kPink[2], 0.9f);
+    hud.rect(margin - 8 * u, margin - 8 * u, 330 * u, 100 * u, 0.0f, 0.0f, 0.0f, 0.45f);
+    hud.rect(margin - 8 * u, margin - 8 * u, 4 * u, 100 * u, kPink[0], kPink[1], kPink[2], 0.9f);
     hud.text("CYBER-APEX", margin + 4 * u, margin, px, kPink[0] * 1.5f, kPink[1] * 1.5f, kPink[2] * 1.5f, 1.0f);
     hud.text(ds.on_road ? "ARTERIAL" : district_name(ds.district), margin + 4 * u, margin + 22 * u, px, kCyan[0],
              kCyan[1], kCyan[2], 1.0f);
     std::snprintf(line, sizeof line, "X %6.0f  Y %6.0f", static_cast<double>(cam.position.x),
                   static_cast<double>(cam.position.y));
     hud.text(line, margin + 4 * u, margin + 44 * u, px * 0.8f, 0.8f, 0.85f, 0.9f, 0.85f);
+    std::snprintf(line, sizeof line, "CR %u   GIGS %u", game.credits(), game.gigs_completed());
+    hud.text(line, margin + 4 * u, margin + 64 * u, px * 0.9f, kYellow[0], kYellow[1], kYellow[2], 1.0f);
 
     // ---- Performance (top-right) ----
     std::snprintf(line, sizeof line, "%3.0f FPS", static_cast<double>(in.fps));
@@ -153,8 +161,49 @@ void build_hud(HudBuilder& hud, const Game& game, const HudInput& in) {
     }
     hud.rect(cx - 1.5f * u, cy + 14 * u, 3 * u, 10 * u, kYellow[0], kYellow[1], kYellow[2], 1.0f);
 
+    // ---- Gig tracker: compass marker + distance / reward line ----
+    {
+        const Gig& gig = game.gig();
+        const float dx = gig.target.x - cam.position.x, dy = gig.target.y - cam.position.y;
+        const float dist = std::sqrt(dx * dx + dy * dy);
+        const float bearing = std::fmod(90.0f - std::atan2(dy, dx) / deg + 720.0f, 360.0f);
+        float d = std::fmod(bearing - heading + 540.0f, 360.0f) - 180.0f;
+        const bool off = std::fabs(d) > 60.0f;
+        d = std::clamp(d, -60.0f, 60.0f);
+        const float mx = cx + d / 60.0f * cw * 0.5f;
+        const float blink = off ? 0.5f + 0.5f * std::sin(game.time() * 8.0f) : 1.0f;
+        hud.ring(mx, cy + 34 * u, 7 * u, 0.0f, kYellow[0], kYellow[1], kYellow[2], blink);
+        const float late = std::max(0.0f, gig.elapsed - gig.par_time) / gig.par_time;
+        const unsigned pay = static_cast<unsigned>(gig.reward * std::max(0.25f, 1.0f - late));
+        const float left = std::max(0.0f, gig.par_time - gig.elapsed);
+        std::snprintf(line, sizeof line, "GIG %u  %4.0fM  %3.0fS  %u CR", gig.index, static_cast<double>(dist),
+                      static_cast<double>(left), pay);
+        const float lw = HudBuilder::text_width(line, px * 0.9f);
+        hud.rect(cx - lw * 0.5f - 10 * u, cy + 46 * u, lw + 20 * u, 26 * u, 0.0f, 0.0f, 0.0f, 0.45f);
+        hud.text(line, cx - lw * 0.5f, cy + 52 * u, px * 0.9f, kYellow[0], kYellow[1], kYellow[2], left > 0.0f ? 1.0f : 0.6f);
+
+        // Payout flash.
+        if (game.since_payout() < 2.5f) {
+            const float a = 1.0f - game.since_payout() / 2.5f;
+            std::snprintf(line, sizeof line, "GIG COMPLETE  +%u CR", game.last_payout());
+            const float w = HudBuilder::text_width(line, px * 1.6f);
+            hud.text(line, in.width * 0.5f - w * 0.5f, in.height * 0.32f, px * 1.6f, kYellow[0] * 1.5f,
+                     kYellow[1] * 1.5f, kYellow[2], a);
+        }
+    }
+
     // ---- Crosshair ----
     hud.ring(in.width * 0.5f, in.height * 0.5f, 5 * u, 0.35f, 1.0f, 1.0f, 1.0f, 0.7f);
+
+    // ---- Jump button ----
+    {
+        const HudButton jb = jump_button(in.width, in.height);
+        const float a = in.jump_held ? 0.55f : 0.25f;
+        hud.ring(jb.cx, jb.cy, jb.radius, 0.08f, kPink[0], kPink[1], kPink[2], a + 0.2f);
+        if (in.jump_held) hud.ring(jb.cx, jb.cy, jb.radius * 0.9f, 0.0f, kPink[0], kPink[1], kPink[2], 0.25f);
+        hud.text("JUMP", jb.cx - HudBuilder::text_width("JUMP", px * 0.9f) * 0.5f, jb.cy - 3.5f * px * 0.9f,
+                 px * 0.9f, 1.0f, 1.0f, 1.0f, 0.7f);
+    }
 
     // ---- Touch stick ----
     if (in.stick.active) {
