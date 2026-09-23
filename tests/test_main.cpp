@@ -247,6 +247,23 @@ void test_building_meshes() {
     CHECK(again->mesh.vertices.size() == m.vertices.size() && again->mesh.indices == m.indices);
 }
 
+void test_mesh_no_degenerate_normals() {
+    // A full streaming window (chamfered towers with recessed waists included): every
+    // vertex finite with a unit normal. A zero normal turns into NaN in the shader and
+    // the bloom chain spreads it into black blocks.
+    city::Params p;
+    p.seed = 2077;
+    const auto snap = build_snapshot(p, -1, -1, 256.0f, 4);
+    std::size_t bad = 0;
+    for (const MeshVertex& v : snap->mesh.vertices) {
+        const int n2 = v.nx * v.nx + v.ny * v.ny + v.nz * v.nz;
+        if (n2 < 110 * 110 || !std::isfinite(v.x) || !std::isfinite(v.y) || !std::isfinite(v.z) || !std::isfinite(v.u) ||
+            std::fabs(v.x) > 1e5f || std::fabs(v.y) > 1e5f)
+            ++bad;
+    }
+    CHECK(bad == 0);
+}
+
 void test_light_grid() {
     city::Params p;
     p.seed = 5;
@@ -529,6 +546,7 @@ int main() {
     test_signs_attached();
     test_building_meshes();
     test_light_grid();
+    test_mesh_no_degenerate_normals();
     test_collision();
     test_gigs();
     test_jump();

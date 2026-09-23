@@ -59,7 +59,9 @@ struct Plan {
     Plan offset(float d) const {
         Plan p = *this;
         p.half = half + d;
-        if (sides == 0 && cut > 0.0f) p.cut = (cut * half + d * (2.0f - std::numbers::sqrt2_v<float>)) / p.half;
+        // Keep chamfered plans chamfered (same vertex count) when offsetting inwards.
+        if (sides == 0 && cut > 0.0f)
+            p.cut = std::max((cut * half + d * (2.0f - std::numbers::sqrt2_v<float>)) / p.half, 0.02f);
         return p;
     }
     Plan with_half(float h) const {
@@ -206,6 +208,7 @@ public:
     }
     // Horizontal ring between an outer and an inner plan (parapet tops, ledges seen from above).
     void ring(const std::vector<V2>& outer, const std::vector<V2>& inner, float z, M mat) {
+        if (outer.size() != inner.size()) return;  // plans must match vertex for vertex
         const std::size_t n = outer.size();
         for (std::size_t i = 0; i < n; ++i) {
             const std::size_t j = (i + 1) % n;
@@ -348,6 +351,92 @@ std::uint32_t face_seed(const city::Building& b, int k) {
     return shader_hash(shader_seed(b) ^ static_cast<std::uint32_t>(k + 3));
 }
 
+// ---- Facade relief -----------------------------------------------------------------
+// The window grid of building_surface.glsl facade(), mirrored so geometry can frame it.
+struct FacadeGrid {
+    int style;        // 0 punched, 1 curtain wall, 2 dense megastructure grid
+    float pitch, fh;  // window pitch along the wall, floor height (m)
+    float wx0, wy0;   // glass starts this far into each cell (fractions)
+};
+FacadeGrid facade_grid(const city::Building& b, bool curtain) {
+    const auto d = static_cast<unsigned>(b.district);
+    FacadeGrid g{};
+    g.style = curtain ? 1 : d == 0 ? 2 : d == 1 ? 1 : 0;
+    g.fh = d == 2 ? 3.1f : 3.8f;
+    g.pitch = g.style == 2 ? 1.6f : 1.8f + 0.8f * shader_hash_f(shader_seed(b) ^ 0xa5u);
+    g.wx0 = g.style == 2 ? 0.2f : 0.22f;
+    g.wy0 = g.style == 2 ? 0.3f : 0.32f;
+    return g;
+}
+
+// Box standing on a face, open at the back (against the wall): front, ends, top, bottom.
+void relief_box(Builder& g, const Face& f, float a0, float a1, float o0, float o1, float z0, float z1, M mat) {
+    const Vec3 c = at(f.point((a0 + a1) * 0.5f, (o0 + o1) * 0.5f), (z0 + z1) * 0.5f);
+    const V2 p00 = f.point(a0, o0), p10 = f.point(a1, o0), p01 = f.point(a0, o1), p11 = f.point(a1, o1);
+    g.quad_out(at(p01, z0), at(p11, z0), at(p11, z1), at(p01, z1), c, mat, a0, a1);  // front
+    g.quad_out(at(p00, z0), at(p01, z0), at(p01, z1), at(p00, z1), c, mat, a0, a0 + (o1 - o0));
+    g.quad_out(at(p10, z0), at(p11, z0), at(p11, z1), at(p10, z1), c, mat, a1, a1 + (o1 - o0));
+    g.quad_out(at(p00, z1), at(p10, z1), at(p11, z1), at(p01, z1), c, mat, a0, a1);  // top
+    g.quad_out(at(p00, z0), at(p10, z0), at(p11, z0), at(p01, z0), c, mat, a0, a1);  // bottom
+}
+
+// Horizontal relief run along a face, broken around signs.
+void relief_strip(Builder& g, const Face& f, float a0, float a1, float o0, float o1, float z0, float z1, M mat) {
+    std::vector<std::pair<float, float>> cuts;
+    const Box3 whole = f.bounds(a0, a1, o0, o1 + 0.2f, z0, z1);
+    for (const Box3& s : g.signs()) {
+        if (!overlaps(s, whole)) continue;
+        const float sa0 = (s.x0 - f.centre.x) * f.t.x + (s.y0 - f.centre.y) * f.t.y;
+        const float sa1 = (s.x1 - f.centre.x) * f.t.x + (s.y1 - f.centre.y) * f.t.y;
+        cuts.push_back({std::min(sa0, sa1) - 0.05f, std::max(sa0, sa1) + 0.05f});
+    }
+    std::sort(cuts.begin(), cuts.end());
+    float a = a0;
+    for (auto [c0, c1] : cuts) {
+        if (c0 > a + 0.3f) relief_box(g, f, a, std::min(c0, a1), o0, o1, z0, z1, mat);
+        a = std::max(a, c1);
+    }
+    if (a1 > a + 0.3f) relief_box(g, f, a, a1, o0, o1, z0, z1, mat);
+}
+
+// Piers between the windows and spandrel bands across each floor line, lined up with
+// the shader's window grid so the glass reads as recessed. mode: 0 grid, 1 horizontal
+// (deep bands, ribbon windows), 2 vertical (deep piers).
+void facade_relief(Builder& g, const city::Building& b, const Face& f, float z0, float z1, bool curtain, int mode) {
+    if (z1 - z0 < 3.0f) return;
+    const FacadeGrid gr = facade_grid(b, curtain);
+    const float band_d = mode == 1 ? 0.65f : mode == 2 ? 0.12f : 0.35f;
+    const float pier_d = mode == 2 ? 0.7f : mode == 1 ? 0.12f : 0.28f;
+    const M mat = curtain ? M::Metal : M::Concrete;
+    const float hl = f.half_len;
+    // Spandrel bands: centred on each floor line (curtain walls: the slab edge above it).
+    for (float j = std::ceil(z0 / gr.fh); j * gr.fh < z1; j += 1.0f) {
+        const float line = j * gr.fh;
+        float zb0 = curtain ? line : line - (1.0f - 0.8f) * gr.fh;
+        float zb1 = curtain ? line + 0.18f * gr.fh : line + gr.wy0 * gr.fh;
+        zb0 = std::max(zb0, z0);
+        zb1 = std::min(zb1, z1);
+        if (zb1 - zb0 > 0.1f) relief_strip(g, f, -hl, hl, 0.0f, band_d, zb0, zb1, mat);
+    }
+    // Piers on the cell boundaries (curtain walls: slim fins every 3 m).
+    const float step = curtain ? 3.0f : gr.pitch;
+    const float w = curtain ? 0.14f : 2.0f * gr.wx0 * gr.pitch;
+    const float depth = curtain ? pier_d + 0.15f : pier_d;
+    for (float k = std::ceil((-hl + w) / step); k * step <= hl - w; k += 1.0f) {
+        const float a = k * step;
+        const Box3 col = f.bounds(a - w * 0.5f, a + w * 0.5f, 0.0f, depth + 0.2f, z0, z1);
+        for (auto [s0, s1] : g.free_spans(col.x0, col.y0, col.x1, col.y1, z0, z1, 1.0f))
+            relief_box(g, f, a - w * 0.5f, a + w * 0.5f, 0.0f, depth, s0, s1, mat);
+    }
+    // Corner columns close the relief at the face ends.
+    const float cw = 0.45f, cd = std::max(band_d, pier_d);
+    for (float a : {-hl + cw * 0.5f, hl - cw * 0.5f}) {
+        const Box3 col = f.bounds(a - cw * 0.5f, a + cw * 0.5f, 0.0f, cd + 0.2f, z0, z1);
+        for (auto [s0, s1] : g.free_spans(col.x0, col.y0, col.x1, col.y1, z0, z1, 1.0f))
+            relief_box(g, f, a - cw * 0.5f, a + cw * 0.5f, 0.0f, cd, s0, s1, mat);
+    }
+}
+
 // Spill from the shopfront band of a facade (building_surface.glsl facade(), shop_band).
 void shopfront_lights(Builder& g, const city::Building& b, const Plan& p) {
     for (int k = 0; k < 4; ++k) {
@@ -373,7 +462,7 @@ void tower(Builder& g, const city::Building& b, const Massing& m, MeshDetail det
     Rng rng{building_hash(b) ^ 0x70e5};
     const bool corp = b.district == city::District::Corporate;
     const M skin = corp ? M::Glass : M::Facade;
-    const bool full = detail == MeshDetail::Full;
+    const bool full = detail != MeshDetail::Massing;
     const Plan podium{b.x, b.y, b.footprint * 0.5f};
     const Plan shaft{b.x, b.y, m.shaft * 0.5f, m.shaft_cut};
     const Plan top{b.x, b.y, m.top_footprint * 0.5f};
@@ -398,34 +487,91 @@ void tower(Builder& g, const city::Building& b, const Massing& m, MeshDetail det
         }
     if (full) shopfront_lights(g, b, podium);
 
-    // Shaft.
-    g.walls(shaft.points(), m.base_top, m.shaft_top, skin);
+    // Shaft, articulated into stacked blocks: recessed "waists" (plant floors behind
+    // louvres and fins) split it where no sign hangs, so towers don't read as prisms.
+    struct Span {
+        float z0, z1;
+    };
+    std::vector<Span> solid_spans, waists;
+    {
+        Rng wr{building_hash(b) ^ 0xa157};
+        const float r = shaft.half + 1.5f;
+        auto free = g.free_spans(b.x - r, b.y - r, b.x + r, b.y + r, m.base_top + 10.0f, m.shaft_top - 10.0f, 24.0f);
+        for (auto [f0, f1] : free) {
+            if (!wr.chance(0.7f)) continue;
+            const float len_w = std::min(f1 - f0 - 4.0f, wr.range(10.0f, 26.0f));
+            const float w0 = std::floor((f0 + wr.range(2.0f, f1 - f0 - len_w - 2.0f)) / kFloor) * kFloor;
+            if (len_w > 7.0f && w0 > f0 - 0.1f) waists.push_back({w0, w0 + std::floor(len_w / kFloor) * kFloor});
+        }
+        float z0 = m.base_top;
+        for (const Span& w : waists) {
+            solid_spans.push_back({z0, w.z0});
+            z0 = w.z1;
+        }
+        solid_spans.push_back({z0, m.shaft_top});
+    }
+    const float inset = 1.2f + 2.0f * unit(city::hash64(building_hash(b) ^ 0x1115));
+    const Plan waist_plan = shaft.offset(-inset);
+    for (const Span& sp : solid_spans) g.walls(shaft.points(), sp.z0, sp.z1, skin);
+    for (const Span& w : waists) {
+        g.walls(waist_plan.points(), w.z0, w.z1, M::Louvre);
+        g.ring(shaft.points(), waist_plan.points(), w.z0, M::Roof);                   // top of the block below
+        auto so = shaft.points(), si = waist_plan.points();
+        std::reverse(so.begin(), so.end());
+        std::reverse(si.begin(), si.end());
+        g.ring(so, si, w.z1, M::Metal);                                                 // soffit of the block above
+        if (full) {
+            // Structural columns carry the block above across the waist.
+            for (int k = 0; k < 4; ++k) {
+                const Face f = face_of(shaft, k);
+                for (float a = -f.half_len + 1.0f; a <= f.half_len - 1.0f; a += (f.half_len * 2.0f - 2.0f) / 4.0f)
+                    relief_box(g, f, a - 0.4f, a + 0.4f, -inset, -0.05f, w.z0, w.z1, M::Concrete);
+                // A lit band along the soffit edge.
+                relief_box(g, f, -f.half_len + 0.3f, f.half_len - 0.3f, 0.0f, 0.12f, w.z1 - 0.35f, w.z1 - 0.1f,
+                           rng.chance(0.5f) ? M::Led : M::LedRed);
+            }
+        }
+    }
+    auto in_waist = [&](float z) {
+        return std::any_of(waists.begin(), waists.end(), [z](const Span& w) { return z > w.z0 - 1.0f && z < w.z1 + 1.0f; });
+    };
+    const bool near = detail == MeshDetail::Near;
+    const int relief_mode = static_cast<int>(city::hash64(building_hash(b) ^ 0x4e1f) % 3u);
+    if (near) {
+        for (int k = 0; k < 4; ++k) {
+            facade_relief(g, b, face_of(podium, k), 5.0f, m.base_top - 0.9f, corp, relief_mode);
+            for (const Span& sp : solid_spans) facade_relief(g, b, face_of(shaft, k), sp.z0, sp.z1, corp, relief_mode);
+        }
+    }
     if (full) {
         // Floor ledges every few floors.
         const int every = 2 + rng.index(4);
         const float step = kFloor * static_cast<float>(every);
         const M ledge = rng.chance(0.5f) ? M::Concrete : M::Metal;
         for (float z = std::ceil((m.base_top + 2.0f) / step) * step; z < m.shaft_top - 3.0f; z += step)
-            g.solid(shaft.offset(0.35f).points(), z + 0.05f, z + 0.5f, ledge);
+            if (!in_waist(z)) g.solid(shaft.offset(0.35f).points(), z + 0.05f, z + 0.5f, ledge);
         // Mechanical floors: louvred bands every ~90 m.
         for (float z = m.base_top + 60.0f + rng.range(0.0f, 30.0f); z < m.shaft_top - 20.0f; z += rng.range(80.0f, 110.0f)) {
             const float zf = std::floor(z / kFloor) * kFloor;
-            g.solid(shaft.offset(0.15f).points(), zf, zf + kFloor * 2.0f, M::Louvre, M::Metal, M::Metal);
+            if (!in_waist(zf) && !in_waist(zf + kFloor * 2.0f))
+                g.solid(shaft.offset(0.15f).points(), zf, zf + kFloor * 2.0f, M::Louvre, M::Metal, M::Metal);
         }
 
         const float style = rng.next();
         const float half = shaft.half;
-        if (style < 0.45f) {
-            // Vertical fins on the flat faces.
+        if (style < 0.45f && !near) {
+            // Vertical fins on the flat faces (the relief replaces them up close).
             const float spacing = rng.range(2.6f, 4.5f), depth = rng.range(0.4f, 0.8f);
             for (int k = 0; k < 4; ++k) {
                 const Face f = face_of(shaft, k);
                 const int count = static_cast<int>((2.0f * f.half_len - 1.0f) / spacing);
                 for (int i = 0; i <= count; ++i) {
                     const float a = -0.5f * spacing * static_cast<float>(count) + spacing * static_cast<float>(i);
-                    const Box3 col = f.bounds(a - 0.15f, a + 0.15f, 0.0f, depth, m.base_top, m.shaft_top);
-                    for (auto [z0, z1] : g.free_spans(col.x0, col.y0, col.x1, col.y1, m.base_top, m.shaft_top, 2.0f))
-                        face_box(g, f, a - 0.15f, a + 0.15f, 0.0f, depth, z0, z1, M::Metal, M::Metal, M::Metal);
+                    for (const Span& sp : solid_spans) {
+                        const Box3 col = f.bounds(a - 0.15f, a + 0.15f, 0.0f, depth, sp.z0, sp.z1);
+                        for (auto [z0, z1] : g.free_spans(col.x0, col.y0, col.x1, col.y1, sp.z0, sp.z1, 2.0f))
+                            relief_box(g, f, a - 0.15f, a + 0.15f, 0.0f, depth, z0, z1, M::Metal);
+                    }
                 }
             }
         } else if (style < 0.75f) {
@@ -434,18 +580,22 @@ void tower(Builder& g, const city::Building& b, const Massing& m, MeshDetail det
                 for (int k = 0; k < 4; ++k) {
                     const float sx = (k & 1) ? 1.0f : -1.0f, sy = (k & 2) ? 1.0f : -1.0f;
                     const V2 c{b.x + sx * (half - 0.4f), b.y + sy * (half - 0.4f)};
-                    g.box(c, {1, 0}, 1.2f, 1.2f, m.base_top, m.shaft_top + 1.5f, M::Concrete, M::Concrete, M::Concrete);
+                    for (const Span& sp : solid_spans)
+                        g.box(c, {1, 0}, 1.2f, 1.2f, sp.z0, sp.z1 + (sp.z1 >= m.shaft_top ? 1.5f : 0.0f), M::Concrete,
+                              M::Concrete, M::Concrete);
                 }
             } else {
                 // Chamfered shaft: LED lines down the diagonal faces, upper part only.
                 const auto pts = shaft.points();
+                const float zl = m.base_top + (m.shaft_top - m.base_top) * 0.45f;
                 for (std::size_t k = 1; k < pts.size(); k += 2) {
                     const V2 a = pts[k], c = pts[(k + 1) % pts.size()];
                     const V2 mid = (a + c) * 0.5f;
                     const V2 along = (c - a) * (1.0f / len(c - a));
                     const V2 out{along.y, -along.x};
-                    const float z0 = m.base_top + (m.shaft_top - m.base_top) * 0.45f;
-                    g.box(mid + out * 0.1f, along, 0.25f, 0.12f, z0, m.shaft_top, M::Led, M::Led, M::Led);
+                    for (const Span& sp : solid_spans)
+                        if (sp.z1 > zl)
+                            g.box(mid + out * 0.1f, along, 0.25f, 0.12f, std::max(sp.z0, zl), sp.z1, M::Led, M::Led, M::Led);
                 }
             }
         }
@@ -453,11 +603,28 @@ void tower(Builder& g, const city::Building& b, const Massing& m, MeshDetail det
         if (corp && rng.chance(0.3f))
             for (int k = 0; k < 4; k += 2) {
                 const Face f = face_of(shaft, (k + rng.index(2)) & 3);
-                const float z0 = m.base_top + 6.0f;
-                const Box3 col = f.bounds(-0.4f, 0.4f, 0.0f, 0.3f, z0, m.shaft_top);
-                for (auto [s0, s1] : g.free_spans(col.x0, col.y0, col.x1, col.y1, z0, m.shaft_top, 3.0f))
-                    face_box(g, f, -0.4f, 0.4f, 0.0f, 0.25f, s0, s1, M::Led, M::Led, M::Led);
+                for (const Span& sp : solid_spans) {
+                    const float z0 = std::max(sp.z0, m.base_top + 6.0f);
+                    const Box3 col = f.bounds(-0.4f, 0.4f, 0.0f, 0.3f, z0, sp.z1);
+                    for (auto [s0, s1] : g.free_spans(col.x0, col.y0, col.x1, col.y1, z0, sp.z1, 3.0f))
+                        face_box(g, f, -0.4f, 0.4f, 0.0f, 0.25f, s0, s1, M::Led, M::Led, M::Led);
+                }
             }
+        // Cantilevered pods: rooms hung off the shaft, lit along their underside.
+        Rng pr{building_hash(b) ^ 0x90d5};
+        for (int k = 0; k < 4; ++k) {
+            if (!pr.chance(0.45f)) continue;
+            const Face f = face_of(shaft, k);
+            const float w = pr.range(6.0f, std::min(14.0f, f.half_len * 1.5f)), out = pr.range(3.0f, 7.0f);
+            const float hgt = std::floor(pr.range(2.0f, 4.0f)) * kFloor;
+            const float a = pr.range(-f.half_len + w * 0.5f + 0.5f, f.half_len - w * 0.5f - 0.5f);
+            const float z0 = std::floor(pr.range(m.base_top + 12.0f, m.shaft_top - hgt - 6.0f) / kFloor) * kFloor;
+            if (z0 < m.base_top + 8.0f || in_waist(z0) || in_waist(z0 + hgt)) continue;
+            if (!g.clear(f.bounds(a - w * 0.5f, a + w * 0.5f, 0.0f, out + 0.5f, z0 - 1.0f, z0 + hgt + 1.0f))) continue;
+            face_box(g, f, a - w * 0.5f, a + w * 0.5f, 0.0f, out, z0, z0 + hgt, skin, M::Roof, M::Metal);
+            relief_box(g, f, a - w * 0.5f, a + w * 0.5f, out, out + 0.12f, z0 - 0.05f, z0 + 0.25f, M::Led);
+            g.light(at(f.point(a, out * 0.5f), z0 - 1.0f), panel_tint(b), 20.0f);
+        }
     }
 
     // Crown.
@@ -489,6 +656,8 @@ void tower(Builder& g, const city::Building& b, const Massing& m, MeshDetail det
     g.cap(shaft.points(), m.shaft_top, true, M::Roof);  // hidden under a taper, a terrace otherwise
     if (z > m.shaft_top) g.cap(top.offset(0.3f).points(), z, true, M::Roof);
     g.walls(top.points(), z, h, skin);
+    if (near)
+        for (int k = 0; k < 4; ++k) facade_relief(g, b, face_of(top, k), z, h - 2.5f, corp, relief_mode);
     g.cap(top.points(), h, true, M::Roof);
     if (!full) return;
     g.parapet(top, 0.3f, h, 1.1f, M::Concrete);
@@ -532,7 +701,7 @@ void sawtooth_roof(Builder& g, const Plan& p, float h) {
 
 void block(Builder& g, const city::Building& b, const Massing& m, MeshDetail detail) {
     Rng rng{building_hash(b) ^ 0xb10c};
-    const bool full = detail == MeshDetail::Full;
+    const bool full = detail != MeshDetail::Massing;
     const bool resi = b.district == city::District::Residential;
     const float h = b.height;
     const Plan base{b.x, b.y, b.footprint * 0.5f};
@@ -569,6 +738,8 @@ void block(Builder& g, const city::Building& b, const Massing& m, MeshDetail det
     const std::uint32_t seed = shader_seed(b);
     const float pitch = 1.8f + 0.8f * shader_hash_f(seed ^ 0xa5u);  // building_surface.glsl window pitch
 
+    const bool near = detail == MeshDetail::Near;
+    const int relief_mode = static_cast<int>(city::hash64(building_hash(b) ^ 0x4e1f) % 3u);
     if (resi) {
         const int corridor_face = rng.chance(0.6f) ? rng.index(4) : -1;
         const int core_face = (corridor_face + 1 + rng.index(3)) & 3;
@@ -578,6 +749,8 @@ void block(Builder& g, const city::Building& b, const Massing& m, MeshDetail det
             for (const Tier& t : tiers) {
                 const Face f = face_of(t.p, k);
                 const float first = std::ceil(std::max(t.z0 + 1.0f, 4.6f) / fh) * fh;
+                if (near && k != corridor_face)
+                    facade_relief(g, b, f, std::max(t.z0, 4.8f), t.z1 - 0.8f, false, relief_mode);
                 if (k == corridor_face) {
                     // Open-air access corridor on every floor: slab with lit soffit + solid balustrade.
                     for (float z = first; z + 1.2f < t.z1; z += fh) {
@@ -639,6 +812,9 @@ void block(Builder& g, const city::Building& b, const Massing& m, MeshDetail det
         // Warehouses: pipe runs, a loading canopy, maybe a chimney.
         for (int k = 0; k < 4; ++k) {
             const Face f = face_of(base, k);
+            if (near)
+                for (const Tier& t : tiers)
+                    facade_relief(g, b, face_of(t.p, k), std::max(t.z0, 4.8f), t.z1 - 0.8f, false, relief_mode);
             if (rng.chance(0.4f)) {
                 const int pipes = 1 + rng.index(3);
                 const float z = rng.range(4.8f, std::max(5.0f, h - 3.0f));
@@ -681,7 +857,7 @@ void shanty(Builder& g, const city::Building& b, MeshDetail detail) {
     g.cap(eave, [&](V2 q) { return roof(q) + 0.08f; }, true, M::Corrugated);
     g.cap(eave, [&](V2 q) { return roof(q) - 0.02f; }, false, M::Metal);
     g.walls(eave, [&](V2 q) { return roof(q) - 0.02f; }, [&](V2 q) { return roof(q) + 0.08f; }, M::Metal);
-    if (detail != MeshDetail::Full) return;
+    if (detail == MeshDetail::Massing) return;
 
     for (int k = 0; k < 4; ++k) {
         const Face f = face_of(p, k);
@@ -734,7 +910,7 @@ void shanty(Builder& g, const city::Building& b, MeshDetail detail) {
 // Vending machines (each a small light source), bin-bag piles and utility boxes against
 // the ground floor: the near layer of every street view.
 void street_clutter(Builder& g, const city::Building& b, MeshDetail detail) {
-    if (detail != MeshDetail::Full) return;
+    if (detail == MeshDetail::Massing) return;
     Rng rng{building_hash(b) ^ 0xc177u};
     const Plan p{b.x, b.y, b.footprint * 0.5f};
     for (int k = 0; k < 4; ++k) {
@@ -863,6 +1039,42 @@ void build_cables(std::span<const CableAnchor> anchors, CityMesh& out) {
                 }
             }
     }
+}
+
+void build_skybridges(std::span<const TowerAnchor> towers, CityMesh& out, std::vector<PointLight>& lights) {
+    for (std::size_t i = 0; i < towers.size(); ++i)
+        for (std::size_t j = i + 1; j < towers.size(); ++j) {
+            const TowerAnchor& a = towers[i];
+            const TowerAnchor& b = towers[j];
+            const float dx = b.x - a.x, dy = b.y - a.y;
+            const bool along_x = std::fabs(dx) > std::fabs(dy);
+            const float lateral = along_x ? std::fabs(dy) : std::fabs(dx);
+            const float dist = along_x ? std::fabs(dx) : std::fabs(dy);
+            const float gap = dist - a.half - b.half;
+            if (lateral > std::min(a.half, b.half) - 4.0f || gap < 6.0f || gap > 45.0f) continue;
+            const float lo = std::max(a.base_top, b.base_top) + 15.0f, hi = std::min(a.shaft_top, b.shaft_top) - 12.0f;
+            if (hi - lo < 6.0f) continue;
+            Rng rng{city::hash64(static_cast<std::uint64_t>(std::lround(a.x * 3 + b.x * 7 + a.y * 11 + b.y * 13)))};
+            if (!rng.chance(0.55f)) continue;
+            Builder g(out, a.building_index, {}, lights);
+            const int decks = 1 + (rng.chance(0.3f) ? 1 : 0);
+            for (int d = 0; d < decks; ++d) {
+                const float z0 = std::floor(rng.range(lo, hi - 5.0f) / 3.8f) * 3.8f;
+                const float w = rng.range(4.0f, 7.0f), hgt = rng.range(4.0f, 7.6f);
+                const float off = rng.range(-1.0f, 1.0f) * (std::min(a.half, b.half) - w - 2.0f - lateral);
+                const V2 ax = along_x ? V2{dx > 0 ? 1.0f : -1.0f, 0.0f} : V2{0.0f, dy > 0 ? 1.0f : -1.0f};
+                const V2 side{-ax.y, ax.x};
+                const V2 start = V2{a.x, a.y} + ax * a.half, end = V2{b.x, b.y} - ax * b.half;
+                const V2 mid = (start + end) * 0.5f + side * (off + (along_x ? (b.y - a.y) : (b.x - a.x)) * 0.5f * 0.0f);
+                g.box(mid + side * 0.0f, ax, gap * 0.5f + 0.3f, w * 0.5f, z0, z0 + hgt,
+                      a.corporate ? M::Glass : M::Facade, M::Roof, M::LitPanel);
+                // Lit rails along both sides of the deck.
+                for (float sd : {-1.0f, 1.0f})
+                    g.box(mid + side * (sd * (w * 0.5f + 0.05f)), ax, gap * 0.5f, 0.06f, z0 - 0.1f, z0 + 0.15f, M::Led,
+                          M::Led, M::Led);
+                g.light(at(mid, z0 - 1.5f), {0.7f, 0.85f, 1.0f}, 30.0f);
+            }
+        }
 }
 
 }  // namespace apex

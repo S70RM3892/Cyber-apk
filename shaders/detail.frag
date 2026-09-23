@@ -20,7 +20,7 @@ void main()
     uint seed = b.seed_district_flags_base.x;
     uint district = b.seed_district_flags_base.y;
     vec3 p = in_world_pos;
-    vec3 n = normalize(in_normal);
+    vec3 n = dot(in_normal, in_normal) > 1e-6 ? normalize(in_normal) : vec3(0.0, 0.0, 1.0);
     float t = frame.camera_pos.w;
     vec3 view_dir = normalize(p - frame.camera_pos.xyz);
     vec3 ambient = building_ambient(seed, p, n);

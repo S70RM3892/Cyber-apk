@@ -36,6 +36,15 @@ void main()
 
     vec3 result;
     if (params.first_pass > 0.5) {
+        // A single NaN / Inf pixel would spread through the whole mip chain as a black
+        // block: drop non-finite samples at the entry of the chain.
+        a = any(isnan(a)) || any(isinf(a)) ? vec3(0.0) : a; b = any(isnan(b)) || any(isinf(b)) ? vec3(0.0) : b;
+        c = any(isnan(c)) || any(isinf(c)) ? vec3(0.0) : c; d = any(isnan(d)) || any(isinf(d)) ? vec3(0.0) : d;
+        e = any(isnan(e)) || any(isinf(e)) ? vec3(0.0) : e; f = any(isnan(f)) || any(isinf(f)) ? vec3(0.0) : f;
+        g = any(isnan(g)) || any(isinf(g)) ? vec3(0.0) : g; h = any(isnan(h)) || any(isinf(h)) ? vec3(0.0) : h;
+        i = any(isnan(i)) || any(isinf(i)) ? vec3(0.0) : i; j = any(isnan(j)) || any(isinf(j)) ? vec3(0.0) : j;
+        k = any(isnan(k)) || any(isinf(k)) ? vec3(0.0) : k; l = any(isnan(l)) || any(isinf(l)) ? vec3(0.0) : l;
+        m = any(isnan(m)) || any(isinf(m)) ? vec3(0.0) : m;
         vec3 g0 = karis((a + b + d + e) * 0.25);
         vec3 g1 = karis((b + c + e + f) * 0.25);
         vec3 g2 = karis((d + e + g + h) * 0.25);

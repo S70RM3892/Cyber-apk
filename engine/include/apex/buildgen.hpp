@@ -18,7 +18,9 @@
 
 namespace apex {
 
-enum class MeshDetail { Full, Massing };
+// Near: everything, plus facade relief (piers / spandrel bands framing each window).
+// Full: attachments and clutter. Massing: silhouettes only.
+enum class MeshDetail { Near, Full, Massing };
 
 // Append the geometry of one building. `building_index` is the index of its first
 // massing box in CitySnapshot::buildings (seed / district for the shader). `signs` are
@@ -34,6 +36,15 @@ struct CableAnchor {
     std::uint32_t building_index;
 };
 void build_cables(std::span<const CableAnchor> anchors, CityMesh& out);
+
+// Enclosed sky bridges between neighbouring towers whose shafts face each other.
+struct TowerAnchor {
+    float x, y, half;       // shaft centre and half width
+    float base_top, shaft_top;
+    std::uint32_t building_index;
+    bool corporate;
+};
+void build_skybridges(std::span<const TowerAnchor> towers, CityMesh& out, std::vector<PointLight>& lights);
 
 // Mirrors of the shader palettes in shaders/include/city_common.glsl.
 Rgb neon_color(std::uint32_t h);

@@ -249,6 +249,22 @@ void place_signs(const city::Building& b, std::vector<SignInstance>& out) {
         if (s.z + s.height * 0.5f < mass.shaft_top - 2.0f) out.push_back(s);
     }
 
+    // A giant vertical video screen covering much of one shaft face.
+    if (mass.tower && b.height > 100.0f && next() < 0.35f) {
+        const int face = static_cast<int>(next() * 4.0f) & 3;
+        const float yaw = static_cast<float>(face) * (std::numbers::pi_v<float> * 0.5f);
+        SignInstance s{};
+        s.style = pack(SignStyle::Screen, signtext::kJapaneseCount + static_cast<std::uint32_t>(next() * static_cast<float>(signtext::kLatinCount - 1)));
+        s.seed = static_cast<std::uint32_t>(city::hash64(h ^ 0x61a7) >> 32);
+        s.width = mass.shaft_flat() * (0.7f + 0.2f * next());
+        s.height = std::min((mass.shaft_top - mass.base_top) * 0.45f, s.width * (2.5f + next() * 1.5f));
+        s.x = b.x + std::cos(yaw) * (mass.shaft * 0.5f + 0.6f);
+        s.y = b.y + std::sin(yaw) * (mass.shaft * 0.5f + 0.6f);
+        s.z = mass.base_top + 6.0f + s.height * 0.5f + next() * std::max(0.0f, mass.shaft_top - mass.base_top - s.height - 12.0f);
+        s.yaw = yaw;
+        if (s.height > 20.0f && s.z + s.height * 0.5f < mass.shaft_top - 2.0f) out.push_back(s);
+    }
+
     if (mass.tower && b.height > 60.0f) {
         const int screens = 2 + static_cast<int>(next() * 4.0f);
         for (int k = 0; k < screens; ++k) {
@@ -419,7 +435,7 @@ PointLight sign_light(const SignInstance& s) {
             emit = 0.7f;
             break;
         case SignStyle::Screen:  // the creative cycles: a neutral, slightly cool average
-            c = mix(neon_color(shader_hash(h ^ 0x5cu)), {0.7f, 0.75f, 1.0f}, 0.6f);
+            c = mix(neon_color(shader_hash(h ^ 0x5cu)), {0.7f, 0.75f, 1.0f}, 0.25f);  // saturated, not white
             emit = 0.9f;
             out = 0.25f * std::sqrt(area);
             break;
@@ -487,7 +503,9 @@ std::shared_ptr<const CitySnapshot> build_snapshot(const city::Params& p, std::i
     // Full-detail meshes near the streaming centre, massing-only meshes beyond.
     const float cx = (static_cast<float>(ctx) + 0.5f) * tile_size, cy = (static_cast<float>(cty) + 0.5f) * tile_size;
     const float detail_radius = tile_size * 2.6f;
+    const float near_radius = tile_size * 1.5f;  // facade relief (heaviest geometry)
     CityMesh& mesh = snap->mesh;
+    std::vector<TowerAnchor> towers;
     for (std::int32_t ty = cty - radius; ty <= cty + radius; ++ty)
         for (std::int32_t tx = ctx - radius; tx <= ctx + radius; ++tx) {
             MeshChunk chunk;
@@ -505,8 +523,17 @@ std::shared_ptr<const CitySnapshot> build_snapshot(const city::Params& p, std::i
                 const float d = std::hypot(b.x - cx, b.y - cy);
                 build_building_mesh(b, first_box,
                                     std::span<const SignInstance>(snap->signs).subspan(first_sign),
-                                    d < detail_radius ? MeshDetail::Full : MeshDetail::Massing, mesh,
+                                    d < near_radius     ? MeshDetail::Near
+                                    : d < detail_radius ? MeshDetail::Full
+                                                        : MeshDetail::Massing,
+                                    mesh,
                                     snap->point_lights);
+                if (d < detail_radius) {
+                    const Massing tm = massing_of(b);
+                    if (tm.tower)
+                        towers.push_back({b.x, b.y, tm.shaft * 0.5f, tm.base_top, tm.shaft_top, first_box,
+                                          b.district == city::District::Corporate});
+                }
                 const float r = b.footprint * 0.5f + 5.0f;  // attachments stick out a little
                 chunk.min[0] = std::min(chunk.min[0], b.x - r);
                 chunk.min[1] = std::min(chunk.min[1], b.y - r);
@@ -526,9 +553,20 @@ std::shared_ptr<const CitySnapshot> build_snapshot(const city::Params& p, std::i
         const float power = l.r + l.g + l.b;
         if (power > 60.0f) {
             const float radius = std::clamp(std::sqrt(s.width * s.height) * 1.1f + 2.0f, 3.0f, 30.0f);
-            const float k = 0.0015f / (radius * 0.1f + 1.0f);
+            const float k = 0.0008f / (radius * 0.1f + 1.0f);
             snap->halos.push_back({l.x, l.y, l.z, radius, l.r * k, l.g * k, l.b * k, 0.0f});
         }
+    }
+
+    // Sky bridges between facing towers: one extra chunk.
+    {
+        MeshChunk chunk;
+        chunk.first_index = static_cast<std::uint32_t>(mesh.indices.size());
+        build_skybridges(towers, mesh, snap->point_lights);
+        chunk.index_count = static_cast<std::uint32_t>(mesh.indices.size()) - chunk.first_index;
+        chunk.min[0] = cx - detail_radius - 60.0f; chunk.min[1] = cy - detail_radius - 60.0f; chunk.min[2] = 0.0f;
+        chunk.max[0] = cx + detail_radius + 60.0f; chunk.max[1] = cy + detail_radius + 60.0f; chunk.max[2] = 700.0f;
+        if (chunk.index_count) mesh.chunks.push_back(chunk);
     }
 
     // Cables between low buildings in the full-detail area: one extra chunk.
