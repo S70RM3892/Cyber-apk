@@ -552,12 +552,12 @@ std::shared_ptr<const CitySnapshot> build_snapshot(const city::Params& p, std::i
                         towers.push_back({b.x, b.y, tm.shaft * 0.5f, tm.base_top, tm.shaft_top, first_box,
                                           b.district == city::District::Corporate});
                 }
-                const float r = b.footprint * 0.5f + 5.0f;  // attachments stick out a little
+                const float r = b.footprint * 0.5f + 10.0f;  // attachments, offset volumes stick out
                 chunk.min[0] = std::min(chunk.min[0], b.x - r);
                 chunk.min[1] = std::min(chunk.min[1], b.y - r);
                 chunk.max[0] = std::max(chunk.max[0], b.x + r);
                 chunk.max[1] = std::max(chunk.max[1], b.y + r);
-                chunk.max[2] = std::max(chunk.max[2], b.height + 20.0f);
+                chunk.max[2] = std::max(chunk.max[2], b.height + 60.0f);  // spires
             }
             chunk.min[2] = 0.0f;
             chunk.index_count = static_cast<std::uint32_t>(mesh.indices.size()) - chunk.first_index;

@@ -240,8 +240,9 @@ Surface facade(float u, float v, uint seed, uint district, uint face_seed, vec3 
         float slab = 1.0 - aa_box(f.y, 0.0, 0.18, fw.y);
         float mullion = aa_box(fract(u / 1.5), 0.04, 0.96, fwidth(u / 1.5));
         glass = slab * mullion;
-        float floor_lit = step(hash_f(floor_hash), 0.25);
-        float bay_lit = step(hash_f(cell_hash), 0.75);
+        // Downtown works late: most office floors lit (the glowing towers of the target look).
+        float floor_lit = step(hash_f(floor_hash), 0.55);
+        float bay_lit = step(hash_f(cell_hash), 0.85);
         vec3 office = mix(vec3(0.75, 0.88, 1.0), vec3(1.0, 0.85, 0.65), step(0.7, hash_f(floor_hash ^ 3u)));
         // Interior read: bright ceiling fixtures near the top of the floor, darker
         // desks/partitions below, fixture rows every 3 m.
@@ -250,8 +251,8 @@ Surface facade(float u, float v, uint seed, uint district, uint face_seed, vec3 
         // Filter each axis separately: across a floor the bays average out first, but
         // lit / dark floors survive as horizontal stripes at distance.
         float bx = smoothstep(0.35, 0.8, fw.x), by = smoothstep(0.35, 0.8, fw.y);
-        float bay_term = mix(mullion * bay_lit * fixtures, 0.96 * 0.75 * 0.8, bx);
-        float floor_term = mix(slab * floor_lit * ceiling, 0.82 * 0.25 * 0.6, by);
+        float bay_term = mix(mullion * bay_lit * fixtures, 0.96 * 0.85 * 0.8, bx);
+        float floor_term = mix(slab * floor_lit * ceiling, 0.82 * 0.55 * 0.6, by);
         windows = office * bay_term * floor_term * 0.3 * 1.6;
         if (far_blend < 0.99) {
             // Near: open-plan office floors seen through the glass, 3 m bays, 9 m deep.
@@ -272,7 +273,7 @@ Surface facade(float u, float v, uint seed, uint district, uint face_seed, vec3 
             float blades = 0.75 + 0.25 * smoothstep(0.1, 0.08, length(fan));
             extra_albedo += ac * vec3(0.10, 0.11, 0.11) * blades * (1.0 - far_blend);
         }
-        float occupancy = style == 2u ? 0.26 : district == 2u ? 0.2 : 0.08;
+        float occupancy = style == 2u ? 0.4 : district == 2u ? 0.28 : 0.1;
         // Occupancy varies per floor: at distance, towers read as floor stripes.
         float floor_var = 0.25 + 1.5 * hash_f(floor_hash ^ 0x0cu);
         float lit = step(hash_f(cell_hash), occupancy * floor_var);

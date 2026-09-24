@@ -155,7 +155,7 @@ std::vector<Lot> make_lots() {
     add(lot_at(150.0f, 122.0f, 30.0f, 38.0f, District::Residential));
     {
         // Centre: the tall one with the red vertical neon.
-        Lot* t = add(lot_at(300.0f, -18.0f, 38.0f, 178.0f, District::Corporate));
+        Lot* t = add(lot_at(300.0f, -18.0f, 38.0f, 320.0f, District::Corporate));
         const Massing m = massing_of(t->building);
         const V2 c = local_of(t->building.x, t->building.y);
         const float face = c.x - m.shaft * 0.5f - 1.0f;
@@ -168,17 +168,17 @@ std::vector<Lot> make_lots() {
     }
     {
         // Red billboard high up, right of centre.
-        Lot* t = add(lot_at(338.0f, -70.0f, 34.0f, 136.0f, District::Corporate));
+        Lot* t = add(lot_at(338.0f, -70.0f, 34.0f, 230.0f, District::Corporate));
         const Massing m = massing_of(t->building);
         const std::uint32_t s = pick_seed(1200u, [](std::uint32_t v) { return (shader_hash(v) & 7u) == 4u; });
         const V2 c = local_of(t->building.x, t->building.y);
         t->signs.push_back(sign_facing({c.x - m.top_footprint * 0.5f + 1.0f, c.y}, kFaceCamera,
-                                       136.0f + kBillboardLift + 6.0f, std::min(18.0f, m.top_footprint - 1.0f), 11.0f,
+                                       230.0f + kBillboardLift + 6.0f, std::min(18.0f, m.top_footprint - 1.0f), 11.0f,
                                        s, pack(SignStyle::Screen, kNeotek, kZoneRed, 3)));
     }
     {
         // Bright white-ish screen behind the centre.
-        Lot* t = add(lot_at(368.0f, 6.0f, 30.0f, 112.0f, District::Corporate));
+        Lot* t = add(lot_at(368.0f, 6.0f, 30.0f, 210.0f, District::Corporate));
         const Massing m = massing_of(t->building);
         const std::uint32_t s = pick_seed(1500u, [](std::uint32_t v) { return (shader_hash(v) & 7u) == 2u; });
         const V2 c = local_of(t->building.x, t->building.y);
@@ -190,7 +190,9 @@ std::vector<Lot> make_lots() {
                              {392, -122, 36, 162}, {432, -40, 40, 214}, {452, -118, 36, 300}, {244, -26, 24, 62},
                              {272, 22, 22, 56},    {262, 150, 40, 128}, {330, 110, 36, 170}, {420, 70, 44, 240},
                              {180, -210, 34, 70},  {350, -230, 40, 140}, {480, 10, 40, 180}, {200, 170, 34, 88}};
-    for (const auto& f : fill) add(lot_at(f[0], f[1], f[2], f[3], District::Corporate));
+    // Downtown soars: the far rows run well past the top of the frame.
+    for (const auto& f : fill)
+        add(lot_at(f[0], f[1], f[2], f[0] > 240.0f ? std::min(f[3] * 1.7f, 460.0f) : f[3], District::Corporate));
 
     // ---- Left foreground block --------------------------------------------------
     add(lot_at(15.0f, 13.5f, 12.0f, 13.0f, District::Residential, true), false);

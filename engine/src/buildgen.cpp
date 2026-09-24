@@ -316,6 +316,47 @@ void tower(Builder& g, const city::Building& b, const Massing& m, MeshDetail det
         }
     }
 
+    if (full) {
+        Rng xr{building_hash(b) ^ 0xe7a0};
+        // Exoskeleton: storey-spanning X braces standing off two opposite faces, the
+        // megastructure look of the corporate core.
+        if (corp && xr.chance(0.4f)) {
+            const float bay = kFloor * static_cast<float>(3 + xr.index(3));
+            const int k0 = xr.index(2);
+            for (int k = k0; k < 4; k += 2) {
+                const Face f = face_of(shaft, k);
+                const float a0 = -f.half_len + 0.6f, a1 = f.half_len - 0.6f;
+                for (const Span& sp : solid_spans)
+                    for (float z = std::ceil((sp.z0 + 1.0f) / bay) * bay; z + bay <= sp.z1 - 1.0f; z += bay) {
+                        if (!g.clear(f.bounds(a0, a1, 0.0f, 1.4f, z, z + bay))) continue;
+                        const float o = 0.9f;
+                        g.beam(at(f.point(a0, o), z), at(f.point(a1, o), z + bay), 0.6f, M::Metal);
+                        g.beam(at(f.point(a1, o), z), at(f.point(a0, o), z + bay), 0.6f, M::Metal);
+                        g.beam(at(f.point(a0, o), z), at(f.point(a1, o), z), 0.5f, M::Metal);
+                        for (float a : {a0, a1}) g.beam(at(f.point(a, o), z), at(f.point(a, o), z + bay), 0.7f, M::Metal);
+                    }
+            }
+        }
+        // Offset volumes: blocks of other cladding hung off one or two faces for part of
+        // the height, so the silhouette isn't a centred stack.
+        const int blocks = xr.chance(0.55f) ? 1 + xr.index(2) : 0;
+        for (int i = 0; i < blocks; ++i) {
+            const Face f = face_of(shaft, xr.index(4));
+            const float w = xr.range(0.35f, 0.7f) * 2.0f * f.half_len, out = xr.range(3.5f, 9.0f);
+            const float a = xr.range(-f.half_len + w * 0.5f, f.half_len - w * 0.5f);
+            const float span = m.shaft_top - m.base_top;
+            const float z0 = std::floor((m.base_top + xr.range(0.1f, 0.55f) * span) / kFloor) * kFloor;
+            const float z1 = std::min(m.shaft_top - 4.0f, z0 + std::floor(xr.range(0.2f, 0.45f) * span / kFloor) * kFloor);
+            if (z1 - z0 < 12.0f || in_waist(z0) || in_waist(z1)) continue;
+            if (!g.clear(f.bounds(a - w * 0.5f, a + w * 0.5f, 0.0f, out + 0.5f, z0 - 1.0f, z1 + 1.5f))) continue;
+            const M clad = skin == M::Glass ? M::Facade : M::Glass;
+            face_box(g, f, a - w * 0.5f, a + w * 0.5f, 0.0f, out, z0, z1, clad, M::Roof, M::Metal);
+            relief_box(g, f, a - w * 0.5f, a + w * 0.5f, out, out + 0.15f, z1 - 0.6f, z1, xr.chance(0.5f) ? M::Led : M::LedRed);
+            relief_box(g, f, a - w * 0.5f, a + w * 0.5f, out, out + 0.15f, z0, z0 + 0.4f, M::Led);
+            g.light(at(f.point(a, out + 1.0f), z0 - 1.5f), panel_tint(b), 30.0f);
+        }
+    }
+
     // Crown.
     const float tier = h - m.shaft_top;
     const float crown = rng.next();
@@ -354,6 +395,46 @@ void tower(Builder& g, const city::Building& b, const Massing& m, MeshDetail det
         const Plan band = top.offset(0.1f);
         const Box3 bb{b.x - band.half, b.y - band.half, h - 2.4f, b.x + band.half, b.y + band.half, h - 1.4f};
         if (g.clear(bb)) g.solid(band.points(), h - 2.4f, h - 1.6f, rng.chance(0.5f) ? M::LedRed : M::Led);
+    }
+    {
+        Rng tr{building_hash(b) ^ 0x5b17e};
+        if (h > 150.0f && top.half > 9.0f && tr.chance(0.35f)) {
+            // Helipad: raised deck on struts, lit rim, landing mark.
+            const V2 c{b.x, b.y};
+            const float r = std::min(top.half - 1.0f, 11.0f), zp = h + 2.2f;
+            for (int k = 0; k < 6; ++k) {
+                const float a = static_cast<float>(k) * kPi / 3.0f;
+                g.beam(at(c + V2{std::cos(a), std::sin(a)} * (r * 0.7f), h), at(c + V2{std::cos(a), std::sin(a)} * r, zp), 0.3f,
+                       M::Metal);
+            }
+            cylinder(g, c, zp, r, 0.4f, 20, M::Metal, M::Concrete);
+            cylinder(g, c, zp + 0.4f, r - 0.2f, 0.06f, 20, M::Led, M::Roof, true);
+            g.box(c, {1.0f, 0.0f}, r * 0.35f, 0.35f, zp + 0.46f, zp + 0.5f, M::LedRed, M::LedRed, M::LedRed);
+            g.box(c + V2{-r * 0.35f, 0.0f}, {1.0f, 0.0f}, 0.35f, r * 0.4f, zp + 0.46f, zp + 0.5f, M::LedRed, M::LedRed, M::LedRed);
+            g.box(c + V2{r * 0.35f, 0.0f}, {1.0f, 0.0f}, 0.35f, r * 0.4f, zp + 0.46f, zp + 0.5f, M::LedRed, M::LedRed, M::LedRed);
+        } else if (h > 90.0f && tr.chance(0.55f)) {
+            // Spire: a lattice mast with satellites, red tips.
+            const float sh = tr.range(18.0f, 50.0f);
+            const V2 c{b.x + tr.range(-0.3f, 0.3f) * top.half, b.y + tr.range(-0.3f, 0.3f) * top.half};
+            const float base = std::min(1.6f, top.half * 0.2f);
+            for (int k = 0; k < 3; ++k) {
+                const float a = static_cast<float>(k) * 2.0944f;
+                g.beam(at(c + V2{std::cos(a), std::sin(a)} * base, h), at(c, h + sh), 0.35f, M::Metal);
+            }
+            for (float zz = h + 4.0f; zz < h + sh - 3.0f; zz += 4.0f) {
+                const float rr = base * (1.0f - (zz - h) / sh);
+                cylinder(g, c, zz, rr + 0.1f, 0.15f, 6, M::Metal, M::Metal, false);
+            }
+            g.beam(at(c, h + sh), at(c, h + sh + 6.0f), 0.15f, M::Metal, 6);
+            g.box(c, {1.0f, 0.0f}, 0.25f, 0.25f, h + sh + 6.0f, h + sh + 6.5f, M::LedRed, M::LedRed, M::LedRed);
+            const int sats = 2 + tr.index(3);
+            for (int i = 0; i < sats; ++i) {
+                const V2 q{b.x + tr.range(-0.7f, 0.7f) * top.half, b.y + tr.range(-0.7f, 0.7f) * top.half};
+                const float qh = tr.range(4.0f, 12.0f);
+                g.beam(at(q, h), at(q, h + qh), 0.12f, M::Metal, 6);
+                g.box(q, {1.0f, 0.0f}, 0.15f, 0.15f, h + qh, h + qh + 0.3f, M::LedRed, M::LedRed, M::LedRed);
+            }
+        }
     }
     if (h > 120.0f && rng.chance(0.4f)) {
         // Open steel crown frame above the roof edge.
