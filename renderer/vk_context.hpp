@@ -31,12 +31,20 @@ struct DeviceFns {
     PFN_vkCmdEndRendering cmd_end_rendering = nullptr;
     PFN_vkCmdPipelineBarrier2 cmd_pipeline_barrier2 = nullptr;
     PFN_vkQueueSubmit2 queue_submit2 = nullptr;
+    // Ray query (only when Context::ray_query()).
+    PFN_vkCreateAccelerationStructureKHR create_as = nullptr;
+    PFN_vkDestroyAccelerationStructureKHR destroy_as = nullptr;
+    PFN_vkGetAccelerationStructureBuildSizesKHR as_build_sizes = nullptr;
+    PFN_vkCmdBuildAccelerationStructuresKHR cmd_build_as = nullptr;
+    PFN_vkGetAccelerationStructureDeviceAddressKHR as_address = nullptr;
+    PFN_vkGetBufferDeviceAddress buffer_address = nullptr;
 };
 
 struct ContextDesc {
     std::vector<const char*> instance_extensions;
     std::vector<const char*> device_extensions;
     bool enable_validation = false;
+    bool allow_ray_query = true;  // use VK_KHR_ray_query when the device has it
 };
 
 // Two-phase setup: the constructor creates the instance; create_device() picks the
@@ -59,6 +67,9 @@ public:
     const DeviceFns& fns() const { return fns_; }
     const VkPhysicalDeviceProperties& properties() const { return props_; }
     bool anisotropy() const { return anisotropy_; }  // samplerAnisotropy enabled
+    // Hardware ray queries (VK_KHR_ray_query + acceleration structures) are enabled.
+    bool ray_query() const { return ray_query_; }
+    std::uint32_t scratch_alignment() const { return as_scratch_align_; }
 
     std::uint32_t find_memory_type(std::uint32_t type_bits, VkMemoryPropertyFlags flags) const;
     bool supports_format(VkFormat format, VkFormatFeatureFlags features) const;
@@ -72,6 +83,8 @@ private:
     std::uint32_t queue_family_ = 0;
     VkPhysicalDeviceProperties props_{};
     bool anisotropy_ = false;
+    bool ray_query_ = false;
+    std::uint32_t as_scratch_align_ = 256;
     VkPhysicalDeviceMemoryProperties mem_props_{};
     DeviceFns fns_;
 };

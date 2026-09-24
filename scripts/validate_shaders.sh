@@ -22,4 +22,15 @@ for src in "${root}"/shaders/*.{comp,frag,vert}; do
         status=1
     fi
 done
+# Ray-query variants (CMakeLists.txt APEX_RT_SHADERS).
+for name in detail.frag buildings.frag ground.frag resolve.frag; do
+    spv="${out}/${name%.frag}_rt.frag.spv"
+    if glslangValidator -V --target-env vulkan1.3 -DAPEX_RT=1 -I"${root}/shaders" -o "${spv}" "${root}/shaders/${name}"; then
+        if command -v spirv-val >/dev/null; then
+            spirv-val --target-env vulkan1.3 "${spv}" || status=1
+        fi
+    else
+        status=1
+    fi
+done
 exit "${status}"

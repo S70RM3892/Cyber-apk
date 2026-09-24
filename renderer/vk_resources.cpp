@@ -15,7 +15,10 @@ Buffer create_buffer(const Context& ctx, VkDeviceSize size, VkBufferUsageFlags u
 
     VkMemoryRequirements req;
     vkGetBufferMemoryRequirements(ctx.device(), b.buffer, &req);
+    VkMemoryAllocateFlagsInfo flags{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO};
+    flags.flags = VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT;
     VkMemoryAllocateInfo ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+    if (usage & VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT) ai.pNext = &flags;  // ray tracing inputs
     ai.allocationSize = req.size;
     ai.memoryTypeIndex = ctx.find_memory_type(
         req.memoryTypeBits, host_visible

@@ -100,6 +100,7 @@ struct Args {
     bool perf = false;  // show the FPS / GPU readout in the HUD
     bool dusk = false;  // hazy dusk instead of rainy night
     float rain = 1.0f;
+    bool rt = true;  // hardware ray queries when available (--no-rt: raster only)
     bool face_gig = false;
     float drive_seconds = 0;
     int traffic = -1;
@@ -132,6 +133,7 @@ Args parse(int argc, char** argv) {
         else if (k == "--perf") a.perf = true;
         else if (k == "--dusk") a.dusk = true;
         else if (k == "--rain") a.rain = std::stof(next());
+        else if (k == "--no-rt") a.rt = false;
         else if (k == "--face-gig") a.face_gig = true;
         else if (k == "--drive") a.drive_seconds = std::stof(next());
         else if (k == "--traffic") a.traffic = std::stoi(next());
@@ -150,6 +152,7 @@ int run_present(const Args& args) {
     using namespace apex;
     vk::ContextDesc desc;
     desc.enable_validation = args.validation;
+    desc.allow_ray_query = args.rt;
     desc.instance_extensions = {VK_KHR_SURFACE_EXTENSION_NAME, VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME};
     desc.device_extensions = {VK_KHR_SWAPCHAIN_EXTENSION_NAME};
     vk::Context ctx(desc);
@@ -238,6 +241,7 @@ int main(int argc, char** argv) {
 
     vk::ContextDesc desc;
     desc.enable_validation = args.validation;
+    desc.allow_ray_query = args.rt;
     vk::Context ctx(desc);
     ctx.create_device(desc);
 

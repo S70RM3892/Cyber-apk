@@ -453,7 +453,9 @@ PointLight sign_light(const SignInstance& s) {
     const float power = std::min(emit * area * 3.0f, 2400.0f);
     const float nx = std::cos(s.yaw), ny = std::sin(s.yaw);
     const float radius = std::clamp(std::sqrt(power) * 4.0f, 5.0f, 48.0f);
-    return {s.x + nx * out, s.y + ny * out, s.z + dz, radius, c.r * power, c.g * power, c.b * power, 0.0f};
+    // Source size for ray-traced soft shadows: the sign is an area light metres across.
+    const float size = std::clamp(0.3f * std::sqrt(area), 0.2f, 3.0f);
+    return {s.x + nx * out, s.y + ny * out, s.z + dz, radius, c.r * power, c.g * power, c.b * power, size};
 }
 
 std::vector<std::uint32_t> build_light_grid(const std::vector<PointLight>& lights, float ox, float oy, float extent) {

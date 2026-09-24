@@ -13,7 +13,10 @@
 #include "apex/game.hpp"
 #include "apex/hud.hpp"
 #include "apex/materials.hpp"
+#include "rt_scene.hpp"
 #include "vk_resources.hpp"
+
+#include <memory>
 
 namespace apex {
 
@@ -75,6 +78,8 @@ public:
 
     RenderSettings& settings() { return settings_; }
     VkExtent2D internal_extent() const { return internal_; }
+    // Hardware ray-traced shadows / reflections are in use.
+    bool ray_tracing() const { return rt_ != nullptr; }
 
 private:
     vk::Context& ctx_;
@@ -92,6 +97,7 @@ private:
 
     // Size-dependent targets
     vk::Image scene_color_, scene_material_, depth_, resolved_;
+    std::array<vk::Image, 2> taa_{};  // TAA history ping-pong (frame parity writes, the other is read)
     std::array<vk::Image, kBloomLevels> bloom_{};
 
     // Data
@@ -122,12 +128,19 @@ private:
     VkDescriptorSet scene_set_ = VK_NULL_HANDLE;
     VkDescriptorSet resolve_set_ = VK_NULL_HANDLE;
     VkDescriptorSet tonemap_set_ = VK_NULL_HANDLE;
+    std::array<VkDescriptorSet, 2> taa_sets_{}, bloom0_sets_{}, tonemap_sets_{};  // per TAA parity
+    bool taa_valid_ = false;          // history holds a previous frame at this size
+    std::uint32_t frame_index_ = 0;
+    Mat4 prev_view_proj_;
+    bool have_prev_ = false;
     std::array<VkDescriptorSet, kBloomLevels> bloom_down_sets_{};
     std::array<VkDescriptorSet, kBloomLevels> bloom_up_sets_{};
 
     // Pipelines
     VkPipelineLayout scene_layout_ = VK_NULL_HANDLE;
     VkPipelineLayout post_layout_ = VK_NULL_HANDLE;
+    VkPipelineLayout resolve_rt_layout_ = VK_NULL_HANDLE;  // post set + scene set (TLAS, signs)
+    std::unique_ptr<RtScene> rt_;                          // null without ray query
     VkPipeline ground_pso_ = VK_NULL_HANDLE, buildings_pso_ = VK_NULL_HANDLE, signs_pso_ = VK_NULL_HANDLE,
                sky_pso_ = VK_NULL_HANDLE, rain_pso_ = VK_NULL_HANDLE, traffic_pso_ = VK_NULL_HANDLE,
                streetlife_pso_ = VK_NULL_HANDLE, beacon_pso_ = VK_NULL_HANDLE,
@@ -135,7 +148,7 @@ private:
                infra_pso_ = VK_NULL_HANDLE, detail_pso_ = VK_NULL_HANDLE,
                halo_pso_ = VK_NULL_HANDLE, box_pso_ = VK_NULL_HANDLE;
     VkPipeline resolve_pso_ = VK_NULL_HANDLE, bloom_down_pso_ = VK_NULL_HANDLE, bloom_up_pso_ = VK_NULL_HANDLE,
-               tonemap_pso_ = VK_NULL_HANDLE;
+               tonemap_pso_ = VK_NULL_HANDLE, taa_pso_ = VK_NULL_HANDLE;
 
     // HUD
     static constexpr std::uint32_t kMaxHudQuads = 4096;
@@ -165,7 +178,7 @@ private:
     void update_frame_ubo(std::uint32_t slot, const Game& game);
     void fullscreen_pass(VkCommandBuffer cmd, VkImageView target, VkExtent2D extent, VkPipeline pso,
                          VkDescriptorSet set, std::uint32_t slot, const void* push, std::uint32_t push_size,
-                         bool load);
+                         bool load, bool with_scene_set = false);
 };
 
 }  // namespace apex

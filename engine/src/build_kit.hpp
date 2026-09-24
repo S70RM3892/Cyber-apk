@@ -114,7 +114,8 @@ public:
     // Light of `power` (roughly emitted flux in the shader's units) in colour c.
     void light(Vec3 p, Rgb c, float power) {
         const float radius = std::clamp(std::sqrt(power) * 4.5f, 4.0f, 36.0f);
-        lights_.push_back({p.x, p.y, p.z, radius, c.r * power, c.g * power, c.b * power, 0.0f});
+        const float size = std::clamp(std::sqrt(power) * 0.06f, 0.15f, 1.0f);  // soft-shadow source radius
+        lights_.push_back({p.x, p.y, p.z, radius, c.r * power, c.g * power, c.b * power, size});
     }
 
     void quad(Vec3 a, Vec3 b, Vec3 c, Vec3 d, V2 ta, V2 tb, V2 tc, V2 td, M mat) {

@@ -68,7 +68,7 @@ struct MeshChunk {
 struct PointLight {
     float x, y, z, radius;  // metres; no influence beyond radius
     float r, g, b;          // intensity (colour * power): irradiance ~ rgb / (d^2 + 1)
-    float pad;
+    float size;             // source radius (metres): penumbra width of ray-traced shadows
 };
 static_assert(sizeof(PointLight) == 32);
 

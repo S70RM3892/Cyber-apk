@@ -1,5 +1,6 @@
 #include "vk_context.hpp"
 
+#include <algorithm>
 #include <cstring>
 
 namespace apex::vk {
@@ -131,7 +132,28 @@ void Context::create_device(const ContextDesc& desc, VkSurfaceKHR present_surfac
     APEX_LOGI("GPU: %s (Vulkan %u.%u.%u)", props_.deviceName, VK_API_VERSION_MAJOR(props_.apiVersion),
               VK_API_VERSION_MINOR(props_.apiVersion), VK_API_VERSION_PATCH(props_.apiVersion));
 
-    VkPhysicalDeviceVulkan13Features f13{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES};
+    // Hardware ray tracing (spec: ray query is a feature flag; everything has a raster
+    // fallback). Needs the extensions plus accelerationStructure, rayQuery and buffer
+    // device addresses.
+    std::uint32_t ext_count = 0;
+    vkEnumerateDeviceExtensionProperties(physical_, nullptr, &ext_count, nullptr);
+    std::vector<VkExtensionProperties> exts(ext_count);
+    vkEnumerateDeviceExtensionProperties(physical_, nullptr, &ext_count, exts.data());
+    auto has_ext = [&](const char* name) {
+        for (const auto& e : exts)
+            if (std::strcmp(e.extensionName, name) == 0) return true;
+        return false;
+    };
+    const bool rt_exts = has_ext(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME) &&
+                         has_ext(VK_KHR_RAY_QUERY_EXTENSION_NAME) &&
+                         has_ext(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME);
+
+    VkPhysicalDeviceRayQueryFeaturesKHR frq{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR};
+    VkPhysicalDeviceAccelerationStructureFeaturesKHR fas{
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR, &frq};
+    VkPhysicalDeviceVulkan12Features f12{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES,
+                                         rt_exts ? static_cast<void*>(&fas) : nullptr};
+    VkPhysicalDeviceVulkan13Features f13{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES, &f12};
     VkPhysicalDeviceFeatures2 supported{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, &f13};
     vkGetPhysicalDeviceFeatures2(physical_, &supported);
     if (!f13.dynamicRendering || !f13.synchronization2) {
@@ -139,10 +161,32 @@ void Context::create_device(const ContextDesc& desc, VkSurfaceKHR present_surfac
         std::abort();
     }
 
-    VkPhysicalDeviceVulkan13Features en13{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES};
+    ray_query_ = desc.allow_ray_query && rt_exts && fas.accelerationStructure && frq.rayQuery &&
+                 f12.bufferDeviceAddress;
+    VkPhysicalDeviceRayQueryFeaturesKHR enrq{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR};
+    enrq.rayQuery = VK_TRUE;
+    VkPhysicalDeviceAccelerationStructureFeaturesKHR enas{
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR, &enrq};
+    enas.accelerationStructure = VK_TRUE;
+    VkPhysicalDeviceVulkan12Features en12{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES,
+                                          ray_query_ ? static_cast<void*>(&enas) : nullptr};
+    en12.bufferDeviceAddress = ray_query_ ? VK_TRUE : VK_FALSE;
+    VkPhysicalDeviceVulkan13Features en13{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES, &en12};
     en13.dynamicRendering = VK_TRUE;
     en13.synchronization2 = VK_TRUE;
     VkPhysicalDeviceFeatures2 enabled{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, &en13};
+    std::vector<const char*> dev_exts = desc.device_extensions;
+    if (ray_query_) {
+        dev_exts.push_back(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME);
+        dev_exts.push_back(VK_KHR_RAY_QUERY_EXTENSION_NAME);
+        dev_exts.push_back(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME);
+        VkPhysicalDeviceAccelerationStructurePropertiesKHR asp{
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_PROPERTIES_KHR};
+        VkPhysicalDeviceProperties2 p2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, &asp};
+        vkGetPhysicalDeviceProperties2(physical_, &p2);
+        as_scratch_align_ = std::max(asp.minAccelerationStructureScratchOffsetAlignment, 1u);
+    }
+    APEX_LOGI("ray query: %s", ray_query_ ? "on" : (rt_exts ? "off (disabled)" : "unsupported"));
     // Anisotropic filtering keeps material textures sharp on walls and streets seen at a
     // grazing angle (optional: used only when the device has it).
     enabled.features.samplerAnisotropy = supported.features.samplerAnisotropy;
@@ -157,8 +201,8 @@ void Context::create_device(const ContextDesc& desc, VkSurfaceKHR present_surfac
     VkDeviceCreateInfo dci{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO, &enabled};
     dci.queueCreateInfoCount = 1;
     dci.pQueueCreateInfos = &qci;
-    dci.enabledExtensionCount = static_cast<std::uint32_t>(desc.device_extensions.size());
-    dci.ppEnabledExtensionNames = desc.device_extensions.data();
+    dci.enabledExtensionCount = static_cast<std::uint32_t>(dev_exts.size());
+    dci.ppEnabledExtensionNames = dev_exts.data();
     VK_CHECK(vkCreateDevice(physical_, &dci, nullptr, &device_));
     vkGetDeviceQueue(device_, queue_family_, 0, &queue_);
 
@@ -170,6 +214,20 @@ void Context::create_device(const ContextDesc& desc, VkSurfaceKHR present_surfac
         device_, "vkCmdPipelineBarrier2", "vkCmdPipelineBarrier2KHR");
     fns_.queue_submit2 =
         load_device_fn<PFN_vkQueueSubmit2>(device_, "vkQueueSubmit2", "vkQueueSubmit2KHR");
+    if (ray_query_) {
+        auto get = [this](const char* n) { return vkGetDeviceProcAddr(device_, n); };
+        fns_.create_as = reinterpret_cast<PFN_vkCreateAccelerationStructureKHR>(get("vkCreateAccelerationStructureKHR"));
+        fns_.destroy_as = reinterpret_cast<PFN_vkDestroyAccelerationStructureKHR>(get("vkDestroyAccelerationStructureKHR"));
+        fns_.as_build_sizes = reinterpret_cast<PFN_vkGetAccelerationStructureBuildSizesKHR>(
+            get("vkGetAccelerationStructureBuildSizesKHR"));
+        fns_.cmd_build_as = reinterpret_cast<PFN_vkCmdBuildAccelerationStructuresKHR>(
+            get("vkCmdBuildAccelerationStructuresKHR"));
+        fns_.as_address = reinterpret_cast<PFN_vkGetAccelerationStructureDeviceAddressKHR>(
+            get("vkGetAccelerationStructureDeviceAddressKHR"));
+        fns_.buffer_address = load_device_fn<PFN_vkGetBufferDeviceAddress>(device_, "vkGetBufferDeviceAddress",
+                                                                             "vkGetBufferDeviceAddressKHR");
+        if (!fns_.create_as || !fns_.cmd_build_as || !fns_.buffer_address) ray_query_ = false;
+    }
 }
 
 Context::~Context() {

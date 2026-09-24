@@ -98,6 +98,14 @@ void main()
     // Neon on the ground reads mostly as coloured wet sheen, so the diffuse term uses a
     // brighter "wet film" albedo than the dark asphalt itself.
     vec3 neon_albedo = mix(vec3(0.05), albedo * 2.0, 0.5);
+#ifdef APEX_RT
+    // Contact shadow along walls, under cars' parking bays, clutter and stairs.
+    float ao = rt_ambient_occlusion(vec3(p, 0.0), vec3(0.0, 0.0, 1.0));
+    ambient *= ao;
+    lamps *= mix(0.4, 1.0, ao);
+    spill *= mix(0.4, 1.0, ao);
+    neon_diffuse *= mix(0.55, 1.0, ao);
+#endif
     vec3 lit = albedo * (ambient * 4.0 + lamps + spill_col * spill * 8.0 + day_light(vec3(p, 0.0), ground_n) * 1.6) +
                neon_albedo * neon_diffuse +
                neon_spec * mix(0.25, 0.9, puddle) * rain;

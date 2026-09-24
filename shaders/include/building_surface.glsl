@@ -54,6 +54,13 @@ vec3 shade_surface(Surface s, vec3 p, vec3 n, vec3 view_dir, vec3 ambient)
 {
     vec3 diffuse, spec;
     local_lights(p, n, view_dir, s.shininess, diffuse, spec);
+#ifdef APEX_RT
+    // Ray-traced AO: corners, undersides and cluttered roofs sink into shadow; it takes
+    // part of the direct neon too (large sources wrap into corners less than the model says).
+    float ao = rt_ambient_occlusion(p, n);
+    ambient *= ao;
+    diffuse *= mix(0.55, 1.0, ao);
+#endif
     return s.albedo * (ambient + diffuse * 0.6 + day_light(p, n)) + s.emissive + spec * s.specular;
 }
 

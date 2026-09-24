@@ -51,7 +51,7 @@ set(APEX_SHADERS
     fullscreen.vert sky.frag rain.vert rain.frag traffic.vert traffic.frag hud.vert hud.frag
     streetlife.vert streetlife.frag beacon.vert beacon.frag signs_glow.frag
     props.vert props.frag lights.vert lights.frag infra.vert infra.frag detail.vert detail.frag halo.vert halo.frag box_detail.vert
-    resolve.frag bloom_down.frag bloom_up.frag tonemap.frag
+    resolve.frag taa.frag bloom_down.frag bloom_up.frag tonemap.frag
 )
 file(GLOB APEX_SHADER_INCLUDES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/shaders/include/*.glsl)
 set(APEX_SPV_DIR ${CMAKE_CURRENT_BINARY_DIR}/spv)
@@ -71,6 +71,25 @@ foreach(s IN LISTS APEX_SHADERS)
         COMMAND ${cmd}
         DEPENDS ${src} ${APEX_SHADER_INCLUDES}
         COMMENT "GLSL -> SPIR-V ${s}" VERBATIM)
+    list(APPEND APEX_SPVS ${spv})
+endforeach()
+# Ray-query variants (-DAPEX_RT): used only on devices with VK_KHR_ray_query, since a
+# module that declares the RayQueryKHR capability can't be loaded anywhere else.
+set(APEX_RT_SHADERS detail.frag buildings.frag ground.frag resolve.frag)
+foreach(s IN LISTS APEX_RT_SHADERS)
+    set(src ${CMAKE_CURRENT_SOURCE_DIR}/shaders/${s})
+    string(REGEX REPLACE "\\.([a-z]+)$" "_rt.\\1" rt_name ${s})
+    set(spv ${APEX_SPV_DIR}/${rt_name}.spv)
+    if (APEX_GLSLC)
+        set(cmd ${APEX_GLSLC} --target-env=vulkan1.3 -O -DAPEX_RT=1 -fshader-stage=frag -o ${spv} ${src})
+    else()
+        set(cmd ${APEX_GLSLANG} -V --target-env vulkan1.3 -DAPEX_RT=1 -S frag -o ${spv} ${src})
+    endif()
+    add_custom_command(OUTPUT ${spv}
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${APEX_SPV_DIR}
+        COMMAND ${cmd}
+        DEPENDS ${src} ${APEX_SHADER_INCLUDES}
+        COMMENT "GLSL -> SPIR-V ${rt_name} (ray query)" VERBATIM)
     list(APPEND APEX_SPVS ${spv})
 endforeach()
 set(APEX_SHADER_HEADER ${CMAKE_CURRENT_BINARY_DIR}/generated/shaders_embedded.hpp)
@@ -94,6 +113,7 @@ add_library(apex_renderer
     renderer/vk_context.cpp
     renderer/vk_resources.cpp
     renderer/renderer.cpp
+    renderer/rt_scene.cpp
     renderer/presenter.cpp
 )
 add_dependencies(apex_renderer apex_shaders)
