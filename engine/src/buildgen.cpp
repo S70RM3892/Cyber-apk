@@ -126,6 +126,38 @@ void facade_relief(Builder& g, const city::Building& b, const Face& f, float z0,
     }
 }
 
+// Close range: the punched windows of the facade shader get real frames: a sill and a
+// head over each pane (aligned with building_surface.glsl's window grid), security
+// cages on some, AC units hung under others.
+void facade_windows(Builder& g, const city::Building& b, const Face& f, float z0, float z1) {
+    const FacadeGrid gr = facade_grid(b, false);
+    if (gr.style == 1) return;  // curtain walls have no punched windows
+    Rng rng{building_hash(b) ^ static_cast<std::uint64_t>(std::lround(f.centre.x * 13.0f + f.centre.y * 7.0f))};
+    const float hl = f.half_len;
+    for (float j = std::ceil(z0 / gr.fh); (j + 1.0f) * gr.fh <= z1; j += 1.0f) {
+        const float wz0 = j * gr.fh + gr.wy0 * gr.fh, wz1 = j * gr.fh + 0.8f * gr.fh;
+        for (float k = std::ceil(-hl / gr.pitch); (k + 1.0f) * gr.pitch <= hl; k += 1.0f) {
+            const float a0 = k * gr.pitch + gr.wx0 * gr.pitch, a1 = (k + 1.0f) * gr.pitch - gr.wx0 * gr.pitch;
+            if (!g.clear(f.bounds(a0 - 0.1f, a1 + 0.1f, 0.0f, 0.45f, wz0 - 0.9f, wz1 + 0.2f))) continue;
+            face_box(g, f, a0 - 0.08f, a1 + 0.08f, 0.0f, 0.16f, wz0 - 0.07f, wz0, M::Concrete, M::Concrete, M::Concrete);
+            face_box(g, f, a0 - 0.04f, a1 + 0.04f, 0.0f, 0.07f, wz1, wz1 + 0.05f, M::Metal, M::Metal, M::Metal);
+            const float r = rng.next();
+            if (r < 0.18f) {
+                // Security cage: a box of bars standing off the window.
+                const float out = 0.3f;
+                for (float a = a0 + 0.1f; a < a1; a += 0.13f)
+                    g.beam(at(f.point(a, out), wz0 - 0.02f), at(f.point(a, out), wz1 + 0.02f), 0.018f, M::Metal, 4);
+                face_box(g, f, a0 - 0.03f, a1 + 0.03f, 0.0f, out + 0.02f, wz1 + 0.02f, wz1 + 0.06f, M::Metal, M::Metal,
+                         M::Metal);
+                face_box(g, f, a0 - 0.03f, a1 + 0.03f, 0.0f, out + 0.02f, wz0 - 0.1f, wz0 - 0.07f, M::Metal, M::Metal,
+                         M::Metal);
+            } else if (r < 0.34f && wz0 > 5.0f) {
+                wall_ac(g, f.point((a0 + a1) * 0.5f, 0.0f), f.n, wz0 - 0.75f, std::min(0.75f, a1 - a0));
+            }
+        }
+    }
+}
+
 // Spill from the shopfront band of a facade (building_surface.glsl facade(), shop_band).
 void shopfront_lights(Builder& g, const city::Building& b, const Plan& p) {
     for (int k = 0; k < 4; ++k) {
@@ -425,13 +457,13 @@ void tower(Builder& g, const city::Building& b, const Massing& m, MeshDetail det
                 const float rr = base * (1.0f - (zz - h) / sh);
                 cylinder(g, c, zz, rr + 0.1f, 0.15f, 6, M::Metal, M::Metal, false);
             }
-            g.beam(at(c, h + sh), at(c, h + sh + 6.0f), 0.15f, M::Metal, 6);
+            g.beam(at(c, h + sh), at(c, h + sh + 6.0f), 0.15f, M::Metal, 10);
             g.box(c, {1.0f, 0.0f}, 0.25f, 0.25f, h + sh + 6.0f, h + sh + 6.5f, M::LedRed, M::LedRed, M::LedRed);
             const int sats = 2 + tr.index(3);
             for (int i = 0; i < sats; ++i) {
                 const V2 q{b.x + tr.range(-0.7f, 0.7f) * top.half, b.y + tr.range(-0.7f, 0.7f) * top.half};
                 const float qh = tr.range(4.0f, 12.0f);
-                g.beam(at(q, h), at(q, h + qh), 0.12f, M::Metal, 6);
+                g.beam(at(q, h), at(q, h + qh), 0.12f, M::Metal, 10);
                 g.box(q, {1.0f, 0.0f}, 0.15f, 0.15f, h + qh, h + qh + 0.3f, M::LedRed, M::LedRed, M::LedRed);
             }
         }
@@ -521,6 +553,8 @@ void block(Builder& g, const city::Building& b, const Massing& m, MeshDetail det
                 const float first = std::ceil(std::max(t.z0 + 1.0f, 4.6f) / fh) * fh;
                 if (near && k != corridor_face)
                     facade_relief(g, b, f, std::max(t.z0, 4.8f), t.z1 - 0.8f, false, relief_mode);
+                if (detail == MeshDetail::Close && k != corridor_face)
+                    facade_windows(g, b, f, std::max(t.z0, 4.8f), t.z1 - 0.8f);
                 if (k == corridor_face) {
                     // Open-air access corridor on every floor: slab with lit soffit + solid balustrade.
                     for (float z = first; z + 1.2f < t.z1; z += fh) {
@@ -591,8 +625,11 @@ void block(Builder& g, const city::Building& b, const Massing& m, MeshDetail det
         for (int k = 0; k < 4; ++k) {
             const Face f = face_of(base, k);
             if (near)
-                for (const Tier& t : tiers)
+                for (const Tier& t : tiers) {
                     facade_relief(g, b, face_of(t.p, k), std::max(t.z0, 4.8f), t.z1 - 0.8f, false, relief_mode);
+                    if (detail == MeshDetail::Close)
+                        facade_windows(g, b, face_of(t.p, k), std::max(t.z0, 4.8f), t.z1 - 0.8f);
+                }
             if (rng.chance(0.4f)) {
                 const int pipes = 1 + rng.index(3);
                 const float z = rng.range(4.8f, std::max(5.0f, h - 3.0f));
@@ -601,7 +638,7 @@ void block(Builder& g, const city::Building& b, const Massing& m, MeshDetail det
                     const float zz = z + 0.2f * static_cast<float>(p);
                     const V2 a = f.point(-f.half_len + 0.5f, out), c = f.point(f.half_len - 0.5f, out);
                     const Box3 bb = f.bounds(-f.half_len, f.half_len, 0.0f, out + r, zz - r, zz + r);
-                    if (g.clear(bb)) g.beam(at(a, zz), at(c, zz), r * 2.0f, M::Metal, 6);
+                    if (g.clear(bb)) g.beam(at(a, zz), at(c, zz), r * 2.0f, M::Metal, 12);
                 }
             } else if (rng.chance(0.4f)) {
                 const float w = rng.range(4.0f, std::max(4.5f, f.half_len));
@@ -655,7 +692,7 @@ void shanty_close(Builder& g, const city::Building& b, const Plan& p, Rng& rng) 
         if (rng.chance(0.55f)) {
             const float a = rng.range(-f.half_len + 0.3f, f.half_len - 0.3f);
             if (g.clear(f.bounds(a - 0.1f, a + 0.1f, 0.0f, 0.2f, 0.0f, top + 0.4f))) {
-                g.beam(at(f.point(a, 0.12f), 0.1f), at(f.point(a, 0.12f), top + 0.3f), 0.09f, M::Metal, 8);
+                g.beam(at(f.point(a, 0.12f), 0.1f), at(f.point(a, 0.12f), top + 0.3f), 0.09f, M::Metal, 12);
                 for (float z = 1.0f; z < top; z += 1.6f)
                     face_box(g, f, a - 0.06f, a + 0.06f, 0.0f, 0.12f, z, z + 0.04f, M::Metal, M::Metal, M::Metal);
             }
@@ -706,7 +743,8 @@ void shanty_close(Builder& g, const city::Building& b, const Plan& p, Rng& rng) 
 
 void shanty(Builder& g, const city::Building& b, MeshDetail detail) {
     Rng rng{building_hash(b) ^ 0x5a47};
-    const Plan p{b.x, b.y, b.footprint * 0.5f};
+    // Corners chamfered by 12 cm: real sheet walls meet at a trim, and the edge catches light.
+    const Plan p{b.x, b.y, b.footprint * 0.5f, 0.12f / (b.footprint * 0.5f)};
     auto roof = [&b](V2 q) { return shanty_roof_z(b, q.x, q.y); };
     // Close range models its windows, so the siding loses the painted ones.
     g.walls(p.points(), 0.0f, roof, detail == MeshDetail::Close ? M::Siding : M::ShantyWall);
@@ -888,15 +926,15 @@ void build_cables(std::span<const CableAnchor> anchors, CityMesh& out) {
                         const V2 pb = V2{b.x, b.y} - dir * (b.footprint * 0.5f) + side * (lat + rng.range(-1.0f, 1.0f));
                         const float za = z0 + rng.range(-0.4f, 0.4f), zb = z0 + rng.range(-0.8f, 0.8f);
                         const float sag = len(pb - pa) * rng.range(0.03f, 0.08f);
-                        constexpr int kSegs = 8;
-                        Vec3 prev = at(pa, za);
-                        for (int k = 1; k <= kSegs; ++k) {
+                        // A smooth sagging tube (a parabola close to the catenary).
+                        constexpr int kSegs = 16;
+                        std::vector<Vec3> wire;
+                        for (int k = 0; k <= kSegs; ++k) {
                             const float t = static_cast<float>(k) / kSegs;
                             const V2 p = pa + (pb - pa) * t;
-                            const Vec3 cur = at(p, za + (zb - za) * t - 4.0f * sag * t * (1.0f - t));
-                            g.beam(prev, cur, 0.05f, M::Metal, 3);
-                            prev = cur;
+                            wire.push_back(at(p, za + (zb - za) * t - 4.0f * sag * t * (1.0f - t)));
                         }
+                        g.tube(wire, 0.035f, 6, M::Metal);
                     }
                 }
             }

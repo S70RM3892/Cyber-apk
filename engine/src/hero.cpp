@@ -288,7 +288,7 @@ void build(CitySnapshot& snap) {
             const float y = -6.5f + static_cast<float>(i) * (13.0f / 7.0f);
             g.beam(w3(1.8f, y, kRoofZ), w3(1.8f, y, kRoofZ + 0.9f), 0.05f, M::Metal);
         }
-        g.beam(w3(1.8f, -6.8f, kRoofZ + 0.9f), w3(1.8f, 6.8f, kRoofZ + 0.9f), 0.06f, M::Metal, 6);
+        g.beam(w3(1.8f, -6.8f, kRoofZ + 0.9f), w3(1.8f, 6.8f, kRoofZ + 0.9f), 0.06f, M::Metal, 12);
         // Stair hut and AC units.
         g.box(w2(-9.0f, 4.0f), kF, 2.0f, 1.6f, kRoofZ, kRoofZ + 2.8f, M::Concrete, M::Roof, M::Concrete);
         snap.props.push_back({w2(-3.0f, -5.2f).x, w2(-3.0f, -5.2f).y, kRoofZ, kHeading, 0.8f, 0.5f, 1.2f, 0x1200u});
@@ -316,7 +316,7 @@ void build(CitySnapshot& snap) {
         // Pipe along the near edge of the roof, on brackets.
         const V2 pa = local[4] + V2{0.0f, 0.4f}, pb = local[0] + V2{-0.3f, 0.6f};
         const float za = roof_z(w2(pa)) + 0.45f, zb = roof_z(w2(pb)) + 0.45f;
-        g.beam(w3(pa.x, pa.y, za), w3(pb.x, pb.y, zb), 0.22f, M::Metal, 8);
+        g.beam(w3(pa.x, pa.y, za), w3(pb.x, pb.y, zb), 0.22f, M::Metal, 16);
         for (int i = 0; i <= 4; ++i) {
             const float t = static_cast<float>(i) / 4.0f;
             const V2 p = pa + (pb - pa) * t;
@@ -400,7 +400,7 @@ void build(CitySnapshot& snap) {
 
         // Utility pole with crossarms, transformer cans and a cluster of red lamps.
         const V2 pole{18.5f, -14.2f};
-        g.beam(w3(pole.x, pole.y, 0.0f), w3(pole.x, pole.y, 30.0f), 0.36f, M::Metal, 8);
+        g.beam(w3(pole.x, pole.y, 0.0f), w3(pole.x, pole.y, 30.0f), 0.36f, M::Metal, 16);
         for (int k = 0; k < 4; ++k) {
             const float z = 21.0f + static_cast<float>(k) * 2.4f;
             const float hw = 2.8f - static_cast<float>(k) * 0.35f;
@@ -414,7 +414,7 @@ void build(CitySnapshot& snap) {
         }
         for (int k = 0; k < 3; ++k) {
             const V2 c = pole + V2{-0.5f, static_cast<float>(k - 1) * 0.9f};
-            g.beam(w3(c.x, c.y, 18.2f), w3(c.x, c.y, 19.6f), 0.55f, M::Metal, 8);
+            g.beam(w3(c.x, c.y, 18.2f), w3(c.x, c.y, 19.6f), 0.55f, M::Metal, 16);
         }
         g.box(w2(pole.x - 0.4f, pole.y + 1.6f), kF, 0.5f, 0.9f, 15.0f, 16.6f, M::Metal, M::Metal, M::Metal);
         g.light(w3(pole.x - 1.0f, pole.y, 24.0f), {1.0f, 0.08f, 0.06f}, 30.0f);
@@ -455,7 +455,7 @@ void build(CitySnapshot& snap) {
             g.beam(w3(p0.x, p0.y, z), w3(p1.x, p1.y, z + 0.25f), 0.12f, M::Metal);
         }
         const V2 lp{9.0f, 6.2f};
-        g.beam(w3(lp.x, lp.y, 0.0f), w3(lp.x, lp.y, 17.0f), 0.2f, M::Metal, 8);
+        g.beam(w3(lp.x, lp.y, 0.0f), w3(lp.x, lp.y, 17.0f), 0.2f, M::Metal, 16);
         g.beam(w3(lp.x, lp.y, 17.0f), w3(lp.x - 0.5f, lp.y - 1.8f, 17.3f), 0.1f, M::Metal);
         g.box(w2(lp.x - 0.5f, lp.y - 1.8f), kF, 0.35f, 0.18f, 16.9f, 17.2f, M::Metal, M::Metal, M::LitPanel);
         g.light(w3(lp.x - 0.5f, lp.y - 1.8f, 16.4f), {0.75f, 0.95f, 1.0f}, 10.0f);

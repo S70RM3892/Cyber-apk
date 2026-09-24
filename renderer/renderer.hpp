@@ -153,7 +153,7 @@ private:
                streetlife_pso_ = VK_NULL_HANDLE, beacon_pso_ = VK_NULL_HANDLE,
                signs_glow_pso_ = VK_NULL_HANDLE, props_pso_ = VK_NULL_HANDLE, lights_pso_ = VK_NULL_HANDLE,
                infra_pso_ = VK_NULL_HANDLE, detail_pso_ = VK_NULL_HANDLE,
-               halo_pso_ = VK_NULL_HANDLE, box_pso_ = VK_NULL_HANDLE;
+               halo_pso_ = VK_NULL_HANDLE, box_pso_ = VK_NULL_HANDLE, box_bevel_pso_ = VK_NULL_HANDLE;
     VkPipeline resolve_pso_ = VK_NULL_HANDLE, bloom_down_pso_ = VK_NULL_HANDLE, bloom_up_pso_ = VK_NULL_HANDLE,
                tonemap_pso_ = VK_NULL_HANDLE, taa_pso_ = VK_NULL_HANDLE;
     VkPipeline rt_light_pso_ = VK_NULL_HANDLE, rt_accum_pso_ = VK_NULL_HANDLE, rt_atrous_pso_ = VK_NULL_HANDLE,

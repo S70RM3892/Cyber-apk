@@ -252,7 +252,7 @@ Renderer::~Renderer() {
     vkDeviceWaitIdle(dev);
     destroy_sized();
     for (VkPipeline p : {ground_pso_, buildings_pso_, signs_pso_, sky_pso_, rain_pso_, traffic_pso_, streetlife_pso_,
-                         beacon_pso_, signs_glow_pso_, props_pso_, lights_pso_, infra_pso_, detail_pso_, halo_pso_, box_pso_, resolve_pso_,
+                         beacon_pso_, signs_glow_pso_, props_pso_, lights_pso_, infra_pso_, detail_pso_, halo_pso_, box_pso_, box_bevel_pso_, resolve_pso_,
                          bloom_down_pso_,
                          bloom_up_pso_, tonemap_pso_, taa_pso_, rt_light_pso_, rt_accum_pso_, rt_atrous_pso_,
                          rt_composite_pso_})
@@ -673,6 +673,8 @@ void Renderer::create_pipelines() {
         bd.vs = sh::box_detail_vert;
         bd.fs = rt_ ? sh::detail_rt_frag : sh::detail_frag;
         box_pso_ = make_pipeline(ctx_, bd);
+        bd.vs = sh::box_bevel_vert;
+        box_bevel_pso_ = make_pipeline(ctx_, bd);
     }
     {
         // Smog halos: additive into the resolved image, no depth attachment (the shader
@@ -1195,16 +1197,21 @@ void Renderer::record(VkCommandBuffer cmd, std::uint32_t slot, const Game& game,
             const Frustum fr = frustum_of(view_proj_);
             for (const MeshChunk& c : mesh_chunks_)
                 if (c.index_count && fr.visible(c.min, c.max)) vkCmdDrawIndexed(cmd, c.index_count, 1, c.first_index, 0, 0);
-            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, box_pso_);
             // Box parts are centimetre-to-metre relief: past ~400 m they are sub-pixel, so
-            // whole tiles skip them there.
+            // whole tiles skip them there. Tiles within ~150 m get chamfered edges.
             const Vec3 cam = game.camera().position;
-            for (const MeshChunk& c : mesh_chunks_) {
-                if (!c.box_count || !fr.visible(c.min, c.max)) continue;
-                const float dx = std::max({c.min[0] - cam.x, 0.0f, cam.x - c.max[0]});
-                const float dy = std::max({c.min[1] - cam.y, 0.0f, cam.y - c.max[1]});
-                if (dx * dx + dy * dy > 400.0f * 400.0f) continue;
-                vkCmdDraw(cmd, 36, c.box_count, 0, c.first_box);
+            for (int pass = 0; pass < 2; ++pass) {
+                vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pass == 0 ? box_bevel_pso_ : box_pso_);
+                for (const MeshChunk& c : mesh_chunks_) {
+                    if (!c.box_count || !fr.visible(c.min, c.max)) continue;
+                    const float dx = std::max({c.min[0] - cam.x, 0.0f, cam.x - c.max[0]});
+                    const float dy = std::max({c.min[1] - cam.y, 0.0f, cam.y - c.max[1]});
+                    const float d2 = dx * dx + dy * dy;
+                    if (d2 > 400.0f * 400.0f) continue;
+                    const bool close = d2 < 150.0f * 150.0f;
+                    if (close != (pass == 0)) continue;
+                    vkCmdDraw(cmd, close ? 132 : 36, c.box_count, 0, c.first_box);
+                }
             }
         }
         if (building_count_) {

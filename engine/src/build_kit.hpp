@@ -228,7 +228,46 @@ public:
                             open_back ? BoxInstance::kOpenBack : 0u, 0u});
     }
     // Straight member between two points with a square (sides = 4) or round cross-section.
+    // Smooth tube along a polyline: rings share radial normals, so pipes, cables and
+    // tanks shade as round surfaces instead of facets. Ring frames are carried along
+    // the path (parallel transport) so the tube doesn't twist.
+    void tube(const std::vector<Vec3>& path, float r, int sides, M mat) {
+        if (path.size() < 2) return;
+        const std::size_t n = path.size();
+        auto tangent = [&](std::size_t i) {
+            const Vec3 a = path[i > 0 ? i - 1 : 0], b = path[std::min(i + 1, n - 1)];
+            return normalize(b - a);
+        };
+        Vec3 t0 = tangent(0);
+        const Vec3 ref = std::fabs(t0.z) < 0.9f ? Vec3{0, 0, 1} : Vec3{1, 0, 0};
+        Vec3 s = normalize(cross(t0, ref));
+        std::vector<std::uint32_t> rings;
+        float along = 0.0f;
+        for (std::size_t i = 0; i < n; ++i) {
+            const Vec3 t = tangent(i);
+            s = normalize(s - t * dot(s, t));
+            const Vec3 q = cross(s, t);
+            if (i > 0) along += length(path[i] - path[i - 1]);
+            for (int k = 0; k <= sides; ++k) {  // seam vertex duplicated for u continuity
+                const float ang = 2.0f * kPi * static_cast<float>(k) / static_cast<float>(sides);
+                const Vec3 nrm = s * std::cos(ang) + q * std::sin(ang);
+                rings.push_back(vertex(path[i] + nrm * r, nrm, {ang * r, along}, mat));
+            }
+        }
+        const auto stride = static_cast<std::uint32_t>(sides + 1);
+        for (std::uint32_t i = 0; i + 1 < n; ++i)
+            for (std::uint32_t k = 0; k < static_cast<std::uint32_t>(sides); ++k) {
+                const std::uint32_t a0 = rings[i * stride + k], a1 = rings[i * stride + k + 1];
+                const std::uint32_t b0 = rings[(i + 1) * stride + k], b1 = rings[(i + 1) * stride + k + 1];
+                m_.indices.insert(m_.indices.end(), {a0, b1, a1, a0, b0, b1});
+            }
+    }
+
     void beam(Vec3 a, Vec3 b, float w, M mat, int sides = 4) {
+        if (sides >= 6) {  // round members: smooth tube
+            tube({a, b}, w * 0.5f, sides, mat);
+            return;
+        }
         const Vec3 d = normalize(b - a);
         const Vec3 ref = std::fabs(d.z) < 0.9f ? Vec3{0, 0, 1} : Vec3{1, 0, 0};
         const Vec3 s = normalize(cross(d, ref)), t = cross(s, d);
