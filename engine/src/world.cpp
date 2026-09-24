@@ -510,6 +510,8 @@ std::shared_ptr<const CitySnapshot> build_snapshot(const city::Params& p, std::i
     // Detail parts are cheap GPU instances, so the whole detail ring gets facade relief.
     const float detail_radius = tile_size * 3.2f;
     const float near_radius = detail_radius;
+    // Modelled windows and equipment where the player can walk to within a minute.
+    const float close_radius = tile_size * 1.3f;
     CityMesh& mesh = snap->mesh;
     std::vector<TowerAnchor> towers;
     for (std::int32_t ty = cty - radius; ty <= cty + radius; ++ty)
@@ -538,7 +540,8 @@ std::shared_ptr<const CitySnapshot> build_snapshot(const city::Params& p, std::i
                 const float d = std::hypot(b.x - cx, b.y - cy);
                 build_building_mesh(b, first_box,
                                     std::span<const SignInstance>(snap->signs).subspan(first_sign),
-                                    d < near_radius     ? MeshDetail::Near
+                                    d < close_radius    ? MeshDetail::Close
+                                    : d < near_radius   ? MeshDetail::Near
                                     : d < detail_radius ? MeshDetail::Full
                                                         : MeshDetail::Massing,
                                     mesh,

@@ -80,6 +80,22 @@ bool on_palette(std::uint32_t h) {
     return i <= 3u || (i >= 8u && i <= 10u) || i == 13u;
 }
 
+// Deck height (bottom) of the ramp above the point nearest to p.
+float ramp_height(V2 p) {
+    float best = 1e9f, z = 0.0f;
+    for (std::size_t i = 0; i + 1 < std::size(kRamp); ++i) {
+        const V2 a{kRamp[i].x, kRamp[i].y}, b{kRamp[i + 1].x, kRamp[i + 1].y};
+        const V2 ab = b - a, ap = p - a;
+        const float t = std::clamp((ap.x * ab.x + ap.y * ab.y) / (ab.x * ab.x + ab.y * ab.y), 0.0f, 1.0f);
+        const float d = len(ap - ab * t);
+        if (d < best) {
+            best = d;
+            z = kRamp[i].z + (kRamp[i + 1].z - kRamp[i].z) * t - 1.3f;
+        }
+    }
+    return z;
+}
+
 city::Building lot_at(float fx, float ly, float footprint, float height, city::District d, bool shanty = false) {
     const V2 p = w2(fx, ly);
     city::Building b{p.x, p.y, footprint, height, 0, d, shanty};
@@ -196,14 +212,19 @@ std::vector<Lot> make_lots() {
         h = city::hash64(h);
         return unit(h);
     };
-    for (float fx = 24.0f; fx < 175.0f; fx += 11.0f)
-        for (float ly = -(fx * 0.95f + 8.0f); ly < fx * 0.95f + 8.0f; ly += 11.0f) {
-            const float x = fx + (rnd() - 0.5f) * 3.0f, y = ly + (rnd() - 0.5f) * 3.0f;
-            const float fp = 7.5f + rnd() * 2.2f;
-            if (x < 70.0f && y > 0.0f && y < 7.5f) continue;  // the alley straight ahead
-            if (dist_to_ramp({x, y}) < 7.0f + fp * 0.5f) continue;
+    // Dense: 9 m pitch, 1.5-3 m alleys, a mix of one- to four-storey shacks.
+    for (float fx = 22.0f; fx < 175.0f; fx += 9.0f)
+        for (float ly = -(fx * 0.95f + 8.0f); ly < fx * 0.95f + 8.0f; ly += 9.0f) {
+            const float x = fx + (rnd() - 0.5f) * 1.6f, y = ly + (rnd() - 0.5f) * 1.6f;
+            const float fp = 6.2f + rnd() * 1.8f;
+            if (x < 70.0f && y > -2.5f && y < 6.5f) continue;  // the alley straight ahead
+            const float tall = rnd();
+            // Low in front so the view drops into the market, taller further out.
+            float hgt = x < 45.0f ? 3.5f + rnd() * 3.5f : x < 70.0f ? 4.5f + rnd() * 4.5f : 5.0f + rnd() * 6.0f;
+            if (tall > 0.8f && x > 40.0f) hgt += 5.0f + rnd() * 4.0f;
+            // Under the ramp only if the deck clears the roof.
+            if (dist_to_ramp({x, y}) < 5.0f + fp * 0.5f && hgt + 2.5f > ramp_height({x, y})) continue;
             if (blocked(x, y, fp * 0.5f)) continue;
-            const float hgt = x < 60.0f ? 4.5f + rnd() * 4.0f : 5.0f + rnd() * 7.0f;
             add(lot_at(x, y, fp, hgt, District::Residential, true));
         }
     return out;

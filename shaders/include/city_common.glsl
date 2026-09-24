@@ -46,6 +46,15 @@ const uint kGlyphChoonpu = 44u;            // signtext::kGlyphChoonpu
 const float PI = 3.14159265;
 
 // PCG-style integer hash (Jarzynski & Olano 2020), 32-bit only: no int64 on mobile.
+// Octahedral normal in [0,1]^2 for the material target's ba (resolve.frag decodes it).
+// (0.5, 0.5) is straight up, so small (x, y) tilts of an upward normal encode as they are.
+vec2 oct_encode(vec3 n)
+{
+    n /= abs(n.x) + abs(n.y) + abs(n.z);
+    vec2 e = n.z >= 0.0 ? n.xy : (1.0 - abs(n.yx)) * vec2(n.x >= 0.0 ? 1.0 : -1.0, n.y >= 0.0 ? 1.0 : -1.0);
+    return e * 0.5 + 0.5;
+}
+
 uint hash_u(uint v)
 {
     uint state = v * 747796405u + 2891336453u;

@@ -88,7 +88,12 @@ void main()
     vec3 p = world_from_depth(in_uv, depth);
     vec3 cam = frame.camera_pos.xyz;
     vec3 v = normalize(p - cam);
-    vec3 n = normalize(vec3((mat.ba * 2.0 - 1.0), 1.0));
+    // Octahedral normal (city_common.glsl oct_encode).
+    vec2 e = mat.ba * 2.0 - 1.0;
+    vec3 n = vec3(e, 1.0 - abs(e.x) - abs(e.y));
+    float fold = max(-n.z, 0.0);
+    n.xy += vec2(n.x >= 0.0 ? -fold : fold, n.y >= 0.0 ? -fold : fold);
+    n = normalize(n);
     vec3 r = reflect(v, n);
 
     // March in world space with growing steps; test against the depth buffer.

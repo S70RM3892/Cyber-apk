@@ -229,7 +229,7 @@ void test_building_meshes() {
         const float n2 = static_cast<float>(v.nx * v.nx + v.ny * v.ny + v.nz * v.nz) / (127.0f * 127.0f);
         CHECK(n2 > 0.9f && n2 < 1.1f);
         CHECK(std::isfinite(v.x) && std::isfinite(v.y) && v.z >= -0.01f && v.z < 700.0f);
-        CHECK((v.building_material >> 24) <= static_cast<std::uint32_t>(SurfaceMaterial::Plastic));
+        CHECK((v.building_material >> 24) <= static_cast<std::uint32_t>(SurfaceMaterial::Lantern));
         max_building = std::max(max_building, v.building_material & 0xFFFFFFu);
     }
     CHECK(max_building < snap->buildings.size());
@@ -253,7 +253,7 @@ void test_building_meshes() {
     for (const BoxInstance& b : m.boxes) {
         CHECK(b.building < snap->buildings.size());
         for (int k = 0; k < 3; ++k)
-            CHECK(((b.materials >> (8 * k)) & 0xFFu) <= static_cast<std::uint32_t>(SurfaceMaterial::Plastic));
+            CHECK(((b.materials >> (8 * k)) & 0xFFu) <= static_cast<std::uint32_t>(SurfaceMaterial::Lantern));
         CHECK(b.hx > 0.0f && b.hy > 0.0f && b.height > 0.0f && std::isfinite(b.x + b.y + b.z0 + b.yaw));
     }
 

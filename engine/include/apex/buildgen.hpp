@@ -18,9 +18,11 @@
 
 namespace apex {
 
-// Near: everything, plus facade relief (piers / spandrel bands framing each window).
-// Full: attachments and clutter. Massing: silhouettes only.
-enum class MeshDetail { Near, Full, Massing };
+// Close: Near plus modelled windows, wall and roof equipment, stairs, lanterns (the
+// few hundred metres the player can walk to). Near: everything, plus facade relief
+// (piers / spandrel bands framing each window). Full: attachments and clutter.
+// Massing: silhouettes only.
+enum class MeshDetail { Close, Near, Full, Massing };
 
 // Append the geometry of one building. `building_index` is the index of its first
 // massing box in CitySnapshot::buildings (seed / district for the shader). `signs` are

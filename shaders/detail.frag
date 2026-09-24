@@ -39,8 +39,30 @@ void main()
         s = tar_roof(p, seed);
     } else if (mat == kMatCorrugated) {
         s = corrugated_roof(p, seed);
-    } else if (mat == kMatShantyWall) {
-        shanty_wall(u, v, seed, face_seed, b.pos_size.w, s.albedo, s.emissive);
+    } else if (mat == kMatShantyWall || mat == kMatSiding) {
+        shanty_wall(u, v, seed, face_seed, b.pos_size.w, mat == kMatShantyWall, s.albedo, s.emissive);
+    } else if (mat == kMatWindow) {
+        s = window_pane(p, n, u, v, seed);
+    } else if (mat == kMatAppliance) {
+        // Off-white painted sheet metal, grimy, with louvre lines on the sides.
+        float grime = 0.6 + 0.4 * value_noise(vec2(u * 3.0, v * 4.0) + float(seed & 255u));
+        float louvre = abs(n.z) < 0.5 ? 0.85 + 0.15 * step(0.5, fract(v * 25.0)) : 1.0;
+        s.albedo = vec3(0.30, 0.31, 0.29) * grime * louvre;
+        s.specular = 0.25;
+        s.shininess = 40.0;
+    } else if (mat == kMatTank) {
+        // Blue plastic tanks on most roofs, stainless steel on some.
+        bool steel = hash_f(seed ^ 0x7a4u) < 0.35;
+        float ribs = 0.85 + 0.15 * step(0.5, fract(v * 3.0));
+        s.albedo = (steel ? vec3(0.22, 0.23, 0.24) : vec3(0.03, 0.10, 0.22)) * ribs * 5.0 *
+                   (0.7 + 0.3 * value_noise(vec2(u * 2.0, v * 2.0)));
+        s.specular = steel ? 0.8 : 0.3;
+        s.shininess = steel ? 90.0 : 30.0;
+    } else if (mat == kMatLantern) {
+        // Paper lantern: glowing, darker ribs, warm core.
+        float ribs = 0.7 + 0.3 * step(0.25, fract(v * 12.0));
+        vec3 tint = hash_f(seed ^ 0x1a7u) < 0.6 ? vec3(1.0, 0.16, 0.07) : vec3(1.0, 0.55, 0.2);
+        s.emissive = tint * 2.2 * ribs;
     } else if (mat == kMatConcrete) {
         // Stained concrete: blotchy grime plus vertical rain streaks.
         vec2 q = abs(n.z) > 0.5 ? p.xy : vec2(u, v);
@@ -128,9 +150,11 @@ void main()
         layer = kTexAsphalt; metres = 4.0;
     } else if (mat == kMatCorrugated) {
         layer = kTexCorrugated; metres = 2.0;
-    } else if (mat == kMatShantyWall) {
+    } else if (mat == kMatShantyWall || mat == kMatSiding) {
         layer = hash_f(hash_u2(uvec2(uint(int(floor(u / 2.1)) + 4096), face_seed)) ^ 0x2u) < 0.3 ? kTexRust : kTexCorrugated;
         metres = 2.0;
+    } else if (mat == kMatAppliance) {
+        layer = kTexPaintedMetal; metres = 1.0;
     } else if (mat == kMatLouvre) {
         layer = kTexMetalPlates; metres = 3.0;
     }
@@ -158,7 +182,7 @@ void main()
             }
             // Corrugated sheet: its ridges carry the relief, the photo only tints it. Painted
             // steel stays smooth (its chipped-paint photo reads as glitter under neon).
-            float relief = mat == kMatCorrugated ? 0.35 : mat == kMatMetal ? 0.4 : 1.0;
+            float relief = mat == kMatCorrugated ? 0.35 : (mat == kMatMetal || mat == kMatAppliance) ? 0.4 : 1.0;
             TexSample ts = sample_material(layer, uv, metres, n, t, b, strength * relief * (1.0 - s.glass));
             s.albedo *= ts.tint;
             shade_n = ts.normal;

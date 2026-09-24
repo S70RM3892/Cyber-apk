@@ -28,6 +28,11 @@ enum class SurfaceMaterial : std::uint8_t {
     LitPanel = 13,   // canopy soffit with light panels
     Vending = 14,    // vending machine front: lit product rows
     Plastic = 15,    // glossy bin bags, crates
+    Window = 16,     // glazed window pane: lit (or dark) room behind reflective glass
+    Siding = 17,     // shack siding without painted windows (real ones are geometry)
+    Appliance = 18,  // AC casings, dishes, meter boxes: off-white painted sheet metal
+    Tank = 19,       // rooftop water tanks: blue plastic or stainless steel
+    Lantern = 20,    // paper lanterns and bulb strings: emissive
 };
 
 struct MeshVertex {

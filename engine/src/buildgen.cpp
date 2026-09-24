@@ -6,6 +6,7 @@
 #include <numbers>
 
 #include "build_kit.hpp"
+#include "detail_kit.hpp"
 #include "apex/massing.hpp"
 
 namespace apex {
@@ -223,7 +224,7 @@ void tower(Builder& g, const city::Building& b, const Massing& m, MeshDetail det
     auto in_waist = [&](float z) {
         return std::any_of(waists.begin(), waists.end(), [z](const Span& w) { return z > w.z0 - 1.0f && z < w.z1 + 1.0f; });
     };
-    const bool near = detail == MeshDetail::Near;
+    const bool near = detail == MeshDetail::Near || detail == MeshDetail::Close;
     const int relief_mode = static_cast<int>(city::hash64(building_hash(b) ^ 0x4e1f) % 3u);
     if (near) {
         for (int k = 0; k < 4; ++k) {
@@ -426,7 +427,7 @@ void block(Builder& g, const city::Building& b, const Massing& m, MeshDetail det
     const std::uint32_t seed = shader_seed(b);
     const float pitch = 1.8f + 0.8f * shader_hash_f(seed ^ 0xa5u);  // building_surface.glsl window pitch
 
-    const bool near = detail == MeshDetail::Near;
+    const bool near = detail == MeshDetail::Near || detail == MeshDetail::Close;
     const int relief_mode = static_cast<int>(city::hash64(building_hash(b) ^ 0x4e1f) % 3u);
     if (resi) {
         const int corridor_face = rng.chance(0.6f) ? rng.index(4) : -1;
@@ -543,11 +544,91 @@ void block(Builder& g, const city::Building& b, const Massing& m, MeshDetail det
 }
 
 // ---- Shacks ---------------------------------------------------------------------
+// Close range: modelled windows with frames, bars and hoods, wall AC units and pipes, an
+// exterior stair, lantern strings and roof equipment (tanks, dishes, vents, condensers).
+void shanty_close(Builder& g, const city::Building& b, const Plan& p, Rng& rng) {
+    auto roof = [&b](V2 q) { return shanty_roof_z(b, q.x, q.y); };
+    for (int k = 0; k < 4; ++k) {
+        const Face f = face_of(p, k);
+        const float top = std::min(roof(f.point(-f.half_len, 0.0f)), roof(f.point(f.half_len, 0.0f))) - 0.35f;
+        const int per_floor = std::max(1, static_cast<int>(2.0f * f.half_len / 2.4f));
+        const float slot = 2.0f * f.half_len / static_cast<float>(per_floor);
+        for (float z = 3.7f; z + 1.1f < top; z += 2.8f) {
+            for (int i = 0; i < per_floor; ++i) {
+                if (rng.chance(0.15f)) continue;
+                const float a = -f.half_len + slot * (static_cast<float>(i) + 0.5f) + rng.range(-0.15f, 0.15f) * slot;
+                const float w = std::min(rng.range(0.8f, 1.3f), slot - 0.5f), h = rng.range(0.9f, std::min(1.35f, top - z - 0.2f));
+                if (w < 0.5f || h < 0.6f) continue;
+                if (!g.clear(f.bounds(a - w * 0.5f - 0.2f, a + w * 0.5f + 0.2f, 0.0f, 0.5f, z - 0.6f, z + h + 0.5f)))
+                    continue;
+                window(g, f, a, z, w, h, {rng.chance(0.35f), rng.chance(0.3f)});
+                // AC unit hung beside the window.
+                const float side = rng.chance(0.5f) ? 1.0f : -1.0f;
+                const float ac_a = a + side * (w * 0.5f + 0.55f);
+                if (rng.chance(0.4f) && std::fabs(ac_a) < f.half_len - 0.5f &&
+                    g.clear(f.bounds(ac_a - 0.45f, ac_a + 0.45f, 0.0f, 0.5f, z - 0.5f, z + 0.8f)))
+                    wall_ac(g, f.point(ac_a, 0.0f), f.n, z + 0.05f);
+            }
+        }
+        // Drain / service pipe down the wall, on brackets.
+        if (rng.chance(0.55f)) {
+            const float a = rng.range(-f.half_len + 0.3f, f.half_len - 0.3f);
+            if (g.clear(f.bounds(a - 0.1f, a + 0.1f, 0.0f, 0.2f, 0.0f, top + 0.4f))) {
+                g.beam(at(f.point(a, 0.12f), 0.1f), at(f.point(a, 0.12f), top + 0.3f), 0.09f, M::Metal, 8);
+                for (float z = 1.0f; z < top; z += 1.6f)
+                    face_box(g, f, a - 0.06f, a + 0.06f, 0.0f, 0.12f, z, z + 0.04f, M::Metal, M::Metal, M::Metal);
+            }
+        }
+    }
+    // Exterior stair to an upper door.
+    if (b.height > 6.0f && rng.chance(0.3f)) {
+        const Face f = face_of(p, rng.index(4));
+        const float run = 18.0f * 0.26f + 1.1f;
+        if (2.0f * f.half_len > run + 0.6f && g.clear(f.bounds(-f.half_len, -f.half_len + run + 0.3f, 0.0f, 1.0f, 0.0f, 4.6f)))
+            wall_stair(g, f, -f.half_len + 0.3f, 1.0f, 3.4f);
+    }
+    // Lanterns strung along a stall front.
+    if (rng.chance(0.35f)) {
+        const Face f = face_of(p, rng.index(4));
+        const float out = rng.range(1.0f, 1.6f);
+        if (g.clear(f.bounds(-f.half_len, f.half_len, 0.0f, out + 0.3f, 2.4f, 3.6f)))
+            lantern_string(g, at(f.point(-f.half_len + 0.4f, out), 3.4f), at(f.point(f.half_len - 0.4f, out), 3.4f),
+                           static_cast<int>(2.0f * f.half_len / 0.9f),
+                           rng.chance(0.6f) ? Rgb{1.0f, 0.18f, 0.08f} : Rgb{1.0f, 0.6f, 0.25f});
+    }
+    // Roof: sometimes an add-on room, then equipment and junk.
+    const float m = p.half - 1.0f;
+    if (m > 1.5f && rng.chance(0.35f)) {
+        const float hx = rng.range(1.2f, std::min(2.2f, m)), hy = rng.range(1.0f, std::min(1.8f, m));
+        const V2 c{b.x + rng.range(-m + hx, m - hx), b.y + rng.range(-m + hy, m - hy)};
+        const float z = std::min({roof(c + V2{hx, hy}), roof(c - V2{hx, hy}), roof(c + V2{hx, -hy}), roof(c + V2{-hx, hy})});
+        roof_room(g, c, z, hx, hy, static_cast<float>(rng.index(4)) * kPi * 0.5f, rng);
+    }
+    const int items = 3 + rng.index(5);
+    for (int i = 0; i < items && m > 0.5f; ++i) {
+        const V2 c{b.x + rng.range(-m, m), b.y + rng.range(-m, m)};
+        const float z = roof(c);
+        const float r = rng.next();
+        if (r < 0.22f) water_tank(g, c, z, rng.range(0.55f, 0.85f), rng.range(1.0f, 1.6f), rng);
+        else if (r < 0.37f) dish(g, c, z, rng.range(0.35f, 0.6f), rng.range(0.0f, 2.0f * kPi));
+        else if (r < 0.52f) vent(g, c, z, rng.range(0.5f, 1.2f));
+        else if (r < 0.67f) roof_ac(g, c, z, static_cast<float>(rng.index(4)) * kPi * 0.5f);
+        else if (r < 0.77f) tv_antenna(g, c, z, rng.range(2.0f, 4.0f), rng.range(0.0f, kPi));
+        else if (r < 0.87f) crates(g, c, z, rng.range(0.0f, kPi), rng);
+        else {
+            const float a = rng.range(0.0f, kPi);
+            const V2 d = V2{std::cos(a), std::sin(a)} * std::min(2.0f, m);
+            clothesline(g, c - d * 0.5f, c + d * 0.5f, std::min(roof(c - d * 0.5f), roof(c + d * 0.5f)), rng);
+        }
+    }
+}
+
 void shanty(Builder& g, const city::Building& b, MeshDetail detail) {
     Rng rng{building_hash(b) ^ 0x5a47};
     const Plan p{b.x, b.y, b.footprint * 0.5f};
     auto roof = [&b](V2 q) { return shanty_roof_z(b, q.x, q.y); };
-    g.walls(p.points(), 0.0f, roof, M::ShantyWall);
+    // Close range models its windows, so the siding loses the painted ones.
+    g.walls(p.points(), 0.0f, roof, detail == MeshDetail::Close ? M::Siding : M::ShantyWall);
     // Sheet roof with an overhang: top, underside, thin edge.
     const auto eave = p.offset(0.5f).points();
     g.cap(eave, [&](V2 q) { return roof(q) + 0.08f; }, true, M::Corrugated);
@@ -597,6 +678,10 @@ void shanty(Builder& g, const city::Building& b, MeshDetail detail) {
                 g.beam(at(f.point(as, 0.0f), z0 - 1.1f), at(f.point(as, out - 0.1f), z0), 0.1f, M::Metal);
             }
         }
+    }
+    if (detail == MeshDetail::Close) {
+        Rng close_rng{building_hash(b) ^ 0xc105e};
+        shanty_close(g, b, p, close_rng);
     }
 }
 

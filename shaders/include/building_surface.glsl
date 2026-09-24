@@ -27,6 +27,11 @@ const uint kMatSawGlass = 12u;
 const uint kMatLitPanel = 13u;
 const uint kMatVending = 14u;
 const uint kMatPlastic = 15u;
+const uint kMatWindow = 16u;
+const uint kMatSiding = 17u;
+const uint kMatAppliance = 18u;
+const uint kMatTank = 19u;
+const uint kMatLantern = 20u;
 
 struct Surface {
     vec3 albedo;      // diffuse reflectance (pre-scaled: multiplied with ambient + local light)
@@ -100,8 +105,8 @@ vec3 building_ambient(uint seed, vec3 p, vec3 n)
 
 // Low-rise shack walls: patchwork corrugated siding, small warm windows, roll-down
 // shutters or open stalls at street level.
-void shanty_wall(float u, float v, uint seed, uint face_seed, float height, out vec3 albedo_out,
-                 out vec3 emissive)
+void shanty_wall(float u, float v, uint seed, uint face_seed, float height, bool painted_windows,
+                 out vec3 albedo_out, out vec3 emissive)
 {
     // Patchwork panels ~2 m wide, each its own paint / rust.
     float panel_id = floor(u / 2.1);
@@ -128,8 +133,8 @@ void shanty_wall(float u, float v, uint seed, uint face_seed, float height, out 
         // Awning strip above the stall glows faintly.
         float awning = clamp((0.12 - abs(v - 2.9)) / max(fw_v, 1e-4), 0.0, 1.0) * stall;
         emissive += awning * neon_color(sh ^ 3u) * 0.9;
-    } else if (v < height - 0.4) {
-        // Small windows on the upper floors.
+    } else if (painted_windows && v < height - 0.4) {
+        // Small windows on the upper floors (Close LOD models them instead).
         vec2 g = vec2(u / 2.1, (v - 3.2) / 2.8);
         vec2 f = fract(g);
         uint wh = hash_u3(uvec3(ucell(g), face_seed));
@@ -352,6 +357,9 @@ Surface facade(float u, float v, uint seed, uint district, uint face_seed, vec3 
     // Glass catches sharp highlights from the signs around it.
     s.specular = mix(0.03, 0.25, glass * (1.0 - shop));
     s.shininess = mix(24.0, 256.0, glass);
+    // Glass mirrors the street: screen-space reflections, ray-traced where they miss.
+    float mirror = s.glass * (curtain ? 0.45 : 0.25);
+    if (mirror > 0.01) s.material = vec4(mirror, 0.03, oct_encode(n));
     return s;
 }
 
@@ -389,6 +397,29 @@ Surface corrugated_roof(vec3 p, uint seed)
     // Wet sheet metal: long streaky highlights from the neon (the look of the target).
     s.specular = mix(1.2, 0.3, rust) * frame.fog.w;
     s.shininess = mix(120.0, 30.0, rust);
+    return s;
+}
+
+// Modelled window pane (Close LOD): a lit or dark room behind reflective glass. Each
+// window hashes its own light from its position (rounded to the window cell).
+Surface window_pane(vec3 p, vec3 n, float u, float v, uint seed)
+{
+    Surface s = surface_default();
+    uvec3 cell = uvec3(ivec3(floor(p.x * 0.6 + 1e4), floor(p.y * 0.6 + 1e4), floor(v / 2.8)));
+    uint h = hash_u3(cell ^ uvec3(seed));
+    float lit = step(hash_f(h ^ 0x11u), 0.6);
+    vec3 room = window_light(h);
+    // Ceiling light: brighter towards the top of the pane; curtains / blinds on some.
+    float fv = fract(v / 2.8);
+    float grad = 0.55 + 0.45 * smoothstep(0.0, 0.5, fv);
+    float blinds = hash_f(h ^ 0x22u) < 0.35 ? 0.55 + 0.45 * step(0.5, fract(v * 9.0)) : 1.0;
+    float curtain = hash_f(h ^ 0x33u) < 0.3 ? 0.35 : 1.0;
+    s.emissive = lit * room * (0.35 + 0.5 * hash_f(h ^ 0x44u)) * grad * blinds * curtain;
+    s.albedo = vec3(0.01, 0.012, 0.015);
+    s.specular = 1.0;
+    s.shininess = 300.0;
+    s.glass = 1.0;
+    s.material = vec4(0.35, 0.02, oct_encode(n));
     return s;
 }
 
