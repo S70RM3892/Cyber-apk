@@ -33,6 +33,14 @@ const uint kMatAppliance = 18u;
 const uint kMatTank = 19u;
 const uint kMatLantern = 20u;
 
+// Saturated print colours for posters (signs_common.glsl ad_palette).
+vec3 ad_palette_bs(uint h)
+{
+    const vec3 p[8] = vec3[8](vec3(1.0, 0.08, 0.45), vec3(0.0, 0.85, 1.0), vec3(1.0, 0.82, 0.05), vec3(0.55, 0.1, 1.0),
+                              vec3(1.0, 0.12, 0.1), vec3(0.1, 1.0, 0.45), vec3(1.0, 0.45, 0.05), vec3(0.95, 0.2, 0.95));
+    return p[h & 7u];
+}
+
 struct Surface {
     vec3 albedo;      // diffuse reflectance (pre-scaled: multiplied with ambient + local light)
     vec3 emissive;
@@ -118,8 +126,11 @@ vec3 building_ambient(uint seed, vec3 p, vec3 n)
 
 // Low-rise shack walls: patchwork corrugated siding, small warm windows, roll-down
 // shutters or open stalls at street level.
-void shanty_wall(float u, float v, uint seed, uint face_seed, float height, bool painted_windows,
-                 out vec3 albedo_out, out vec3 emissive)
+vec3 interior_room(vec2 o, vec3 d, vec3 size, vec3 light, uint h);
+vec3 room_ray(vec3 view_dir, vec3 n);
+
+void shanty_wall(float u, float v, uint seed, uint face_seed, float height, bool painted_windows, vec3 view_dir,
+                 vec3 n, out vec3 albedo_out, out vec3 emissive)
 {
     // Patchwork panels ~2 m wide, each its own paint / rust.
     float panel_id = floor(u / 2.1);
@@ -139,7 +150,12 @@ void shanty_wall(float u, float v, uint seed, uint face_seed, float height, bool
         float stall = step(0.45, hash_f(sh));
         float opening = clamp((min(fract(u / 3.0) - 0.06, 0.94 - fract(u / 3.0))) / max(fw_u / 3.0, 1e-4) + 0.5, 0.0, 1.0) *
                         clamp((min(v - 0.2, 2.7 - v)) / max(fw_v, 1e-4) + 0.5, 0.0, 1.0);
-        vec3 inside = mix(vec3(1.0, 0.7, 0.45), neon_color(sh), 0.5) * (0.25 + 0.15 * sin(v * 9.0 + float(sh)));
+        // Open stall: a lit, stocked room 3 m wide and 3 m deep behind the opening
+        // (interior mapping), not a flat glowing panel.
+        vec3 lamp = mix(vec3(1.0, 0.7, 0.45), neon_color(sh), 0.5) * 0.3;
+        vec3 inside = interior_room(vec2(fract(u / 3.0) * 3.0, v), room_ray(view_dir, n), vec3(3.0, 3.2, 3.0), lamp, sh);
+        // Shelves of goods on the back wall read as colourful stripes.
+        inside *= 0.75 + 0.5 * step(0.5, fract(v * 3.3)) * (0.5 + 0.5 * hash_f(sh ^ uint(floor(u * 3.0))));
         vec3 shutter = vec3(0.07, 0.075, 0.08) * (0.8 + 0.2 * step(0.5, fract(v * 6.0)));
         albedo = mix(albedo, stall > 0.5 ? vec3(0.0) : shutter, opening);
         emissive += stall * opening * inside;
@@ -435,6 +451,49 @@ Surface window_pane(vec3 p, vec3 n, float u, float v, uint seed)
     s.glass = 1.0;
     s.material = vec4(0.35, 0.02, oct_encode(n));
     return s;
+}
+
+// Paper posters and stickers pasted on street-level walls (u along the wall, v height):
+// layered, sun-faded, torn at the edges; each a colour field with one big glyph of a
+// sign string or bold stripes. Returns coverage in w and the paper colour in rgb.
+vec4 street_posters(float u, float v, uint face_seed)
+{
+    vec4 result = vec4(0.0);
+    if (v < 0.5 || v > 3.0) return result;
+    for (int layer = 0; layer < 2; ++layer) {
+        float pitch = layer == 0 ? 1.3 : 0.9;
+        float cu = floor(u / pitch + float(layer) * 0.5);
+        uint h = hash_u2(uvec2(uint(int(cu) + 8192 + layer * 977), face_seed));
+        if (hash_f(h) > (layer == 0 ? 0.55 : 0.35)) continue;
+        float w = mix(0.45, 0.8, hash_f(h ^ 1u)), ht = w * mix(1.2, 1.5, hash_f(h ^ 2u));
+        float x0 = (cu - float(layer) * 0.5) * pitch + hash_f(h ^ 3u) * (pitch - w);
+        float y0 = mix(0.9, 1.6, hash_f(h ^ 4u));
+        vec2 q = vec2((u - x0) / w, (v - y0) / ht);  // 0..1 inside
+        // Torn, curling edges.
+        float tear = (value_noise(vec2(u, v) * 9.0 + float(h & 255u)) - 0.5) * 0.08;
+        if (q.x < tear || q.x > 1.0 - tear || q.y < tear || q.y > 1.0 + tear * 0.5) continue;
+        vec3 bg = mix(ad_palette_bs(h), vec3(0.8, 0.78, 0.7), 0.25 + 0.35 * hash_f(h ^ 5u));  // faded
+        vec3 col = bg;
+        if (hash_f(h ^ 6u) < 0.6) {
+            // One big glyph of a Japanese sign string, in black or white.
+            uint text = h % 52u;
+            uint g = sign_string_glyph(text, 0u);
+            vec2 gq = (vec2(q.x, 1.0 - q.y) - vec2(0.12, 0.25)) / vec2(0.76, 0.6);
+            float d = (all(greaterThanEqual(gq, vec2(0.0))) && all(lessThanEqual(gq, vec2(1.0)))) ? glyph_distance(g, gq) : -1.0;
+            vec3 ink = hash_f(h ^ 7u) < 0.5 ? vec3(0.03) : vec3(0.9);
+            col = mix(col, ink, smoothstep(-0.02, 0.02, d));
+            // Small print lines at the foot.
+            float lines = step(0.08, q.y) * step(q.y, 0.2) * step(0.5, fract(q.y * 40.0)) * step(0.1, q.x) * step(q.x, 0.9);
+            col = mix(col, ink, lines * 0.6);
+        } else {
+            float stripes = step(0.5, fract((q.x + q.y) * 4.0));
+            col = mix(col, ad_palette_bs(h >> 5u), stripes * 0.8);
+        }
+        // Weathering: water stains, dirt.
+        col *= 0.65 + 0.35 * value_noise(vec2(u, v) * 3.0 + float(h & 63u));
+        result = vec4(col, 1.0);
+    }
+    return result;
 }
 
 #endif

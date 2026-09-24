@@ -23,11 +23,16 @@
 
 namespace apex {
 
-std::size_t MaterialTextures::layer_bytes() const {
+namespace {
+std::size_t chain_bytes(std::uint32_t size, std::uint32_t mips) {
     std::size_t total = 0;
     for (std::uint32_t m = 0, s = size; m < mips; ++m, s = std::max(1u, s / 2)) total += std::size_t{s} * s * 4;
     return total;
 }
+}  // namespace
+
+std::size_t MaterialTextures::layer_bytes() const { return chain_bytes(size, mips); }
+std::size_t MaterialTextures::nrm_layer_bytes() const { return chain_bytes(nrm_size, nrm_mips); }
 
 namespace {
 
@@ -81,17 +86,19 @@ std::optional<MaterialTextures> load_material_textures(const AssetReader& read) 
             int w = 0, h = 0, comp = 0;
             stbi_uc* px = stbi_load_from_memory(file->data(), static_cast<int>(file->size()), &w, &h, &comp, 4);
             if (!px) return std::nullopt;
-            if (w != h || w <= 0 || (t.size && static_cast<std::uint32_t>(w) != t.size)) {
+            std::uint32_t& size = kind == 0 ? t.size : t.nrm_size;
+            std::uint32_t& mips = kind == 0 ? t.mips : t.nrm_mips;
+            if (w != h || w <= 0 || (size && static_cast<std::uint32_t>(w) != size)) {
                 stbi_image_free(px);
                 return std::nullopt;
             }
-            if (!t.size) {
-                t.size = static_cast<std::uint32_t>(w);
-                for (std::uint32_t s = t.size; s >= 1; s /= 2) ++t.mips;
+            if (!size) {
+                size = static_cast<std::uint32_t>(w);
+                for (std::uint32_t s = size; s >= 1; s /= 2) ++mips;
             }
             // Averaged normals shorten at coarse mips; the shader renormalises, which also
             // flattens distant detail (a cheap stand-in for Toksvig filtering).
-            append_chain(kind == 0 ? t.albedo : t.nrm, px, t.size, t.mips, kind == 0);
+            append_chain(kind == 0 ? t.albedo : t.nrm, px, size, mips, kind == 0);
             stbi_image_free(px);
         }
     }

@@ -13,13 +13,15 @@
 namespace apex {
 
 struct MaterialTextures {
-    static constexpr std::uint32_t kLayers = 8;  // shaders/include/materials.glsl
-    std::uint32_t size = 0;                      // mip 0 edge (texels)
-    std::uint32_t mips = 0;
+    static constexpr std::uint32_t kLayers = 16;  // shaders/include/materials.glsl
+    // Albedo and normal arrays have their own resolution (colour carries the detail).
+    std::uint32_t size = 0, mips = 0;          // albedo mip 0 edge (texels) and chain length
+    std::uint32_t nrm_size = 0, nrm_mips = 0;  // normal + roughness
     // Per layer, mips from 0: size^2, (size/2)^2 ... RGBA8. Albedo is sRGB colour; nrm
     // holds normal X, Y (unorm, 0.5 = 0) and roughness in B.
     std::vector<std::uint8_t> albedo, nrm;
-    std::size_t layer_bytes() const;  // bytes of one layer's full mip chain
+    std::size_t layer_bytes() const;      // bytes of one albedo layer's full mip chain
+    std::size_t nrm_layer_bytes() const;  // same for the normal array
 };
 
 // Reads a file by name ("materials/0_albedo.jpg"); nullopt if missing.

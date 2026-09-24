@@ -42,7 +42,7 @@ void main()
     } else if (mat == kMatCorrugated) {
         s = corrugated_roof(p, seed);
     } else if (mat == kMatShantyWall || mat == kMatSiding) {
-        shanty_wall(u, v, seed, face_seed, b.pos_size.w, mat == kMatShantyWall, s.albedo, s.emissive);
+        shanty_wall(u, v, seed, face_seed, b.pos_size.w, mat == kMatShantyWall, view_dir, n, s.albedo, s.emissive);
     } else if (mat == kMatWindow) {
         s = window_pane(p, n, u, v, seed);
     } else if (mat == kMatAppliance) {
@@ -140,25 +140,42 @@ void main()
     }
     // Photographic material detail: colour variation, normal relief and roughness from the
     // CC0 layers (materials.glsl), faded out with distance where it would only shimmer.
-    float layer = -1.0, metres = 3.0;
+    // photo: how much the photographed colour replaces the palette colour (the rest
+    // only modulates it).
+    float layer = -1.0, metres = 3.0, photo = 0.0;
+    uint mh = hash_u(seed ^ 0x3a7u);
     if (mat <= kMatGlass) {
-        layer = district == 2u ? kTexPlaster : district == 1u ? kTexMetalPlates : kTexConcrete;
-        metres = district == 1u ? 4.0 : 3.0;
+        // Facade cladding per building: towers in dark tile or plates, blocks in mosaic
+        // tile, peeling plaster or stained concrete.
+        const float kResi[4] = float[4](kTexMosaic, kTexPlaster, kTexStainedConcrete, kTexConcrete);
+        layer = district == 1u ? (mh % 2u == 0u ? kTexMetalPlates : kTexDarkTiles)
+              : district == 0u ? kTexDarkTiles : kResi[mh % 4u];
+        metres = layer == kTexMosaic ? 1.2 : district == 1u ? 4.0 : 3.0;
+        photo = 0.55;
     } else if (mat == kMatConcrete) {
-        layer = kTexConcrete; metres = 2.5;
+        layer = mh % 3u == 0u ? kTexStainedConcrete : kTexConcrete; metres = 2.5; photo = 0.7;
     } else if (mat == kMatMetal) {
-        layer = kTexPaintedMetal; metres = 1.5;
+        layer = mh % 3u == 0u ? kTexRust : kTexPaintedMetal; metres = 1.5; photo = 0.6;
     } else if (mat == kMatRoof) {
-        layer = kTexAsphalt; metres = 4.0;
+        layer = mh % 2u == 0u ? kTexAsphalt : kTexStainedConcrete; metres = 4.0; photo = 0.5;
     } else if (mat == kMatCorrugated) {
-        layer = kTexCorrugated; metres = 2.0;
+        const float kRoofs[4] = float[4](kTexCorrugated, kTexRust, kTexCorrugatedBlue, kTexCorrugated);
+        layer = kRoofs[mh % 4u]; metres = 2.0; photo = 0.8;
     } else if (mat == kMatShantyWall || mat == kMatSiding) {
-        layer = hash_f(hash_u2(uvec2(uint(int(floor(u / 2.1)) + 4096), face_seed)) ^ 0x2u) < 0.3 ? kTexRust : kTexCorrugated;
-        metres = 2.0;
+        // Every ~2 m panel is its own sheet: galvanised, painted and rusting, bare rust,
+        // old plaster or boards.
+        const float kPanels[8] = float[8](kTexCorrugated, kTexCorrugatedBlue, kTexCorrugatedRed, kTexCorrugatedGreen,
+                                          kTexRust, kTexRustyWhite, kTexPlaster, kTexWood);
+        uint ph = hash_u2(uvec2(uint(int(floor(u / 2.1)) + 4096), face_seed));
+        layer = kPanels[ph % 8u];
+        metres = layer == kTexPlaster ? 2.5 : 2.0;
+        photo = 0.85;
     } else if (mat == kMatAppliance) {
-        layer = kTexPaintedMetal; metres = 1.0;
+        layer = kTexRustyWhite; metres = 1.2; photo = 0.8;
     } else if (mat == kMatLouvre) {
         layer = kTexMetalPlates; metres = 3.0;
+    } else if (mat == kMatTank) {
+        layer = kTexRustyWhite; metres = 1.5; photo = 0.0;
     }
     vec3 shade_n = n;
     if (layer >= 0.0) {
@@ -185,8 +202,11 @@ void main()
             // Corrugated sheet: its ridges carry the relief, the photo only tints it. Painted
             // steel stays smooth (its chipped-paint photo reads as glitter under neon).
             float relief = mat == kMatCorrugated ? 0.35 : (mat == kMatMetal || mat == kMatAppliance) ? 0.4 : 1.0;
-            TexSample ts = sample_material(layer, uv, metres, n, t, b, strength * relief * (1.0 - s.glass));
-            s.albedo *= ts.tint;
+            TexSample ts = sample_material(layer, uv, metres, n, t, b, strength * (1.0 - s.glass), relief);
+            // Palette colour modulated by the photo, or the photo itself (dimmed a little:
+            // scans are shot in daylight, the palette is tuned for a night city).
+            float w = photo * strength * (1.0 - s.glass);
+            s.albedo = mix(s.albedo * ts.tint, ts.albedo * 0.8, w);
             shade_n = ts.normal;
             // Rougher texels dull the highlights, smooth ones sharpen them.
             float gloss = mix(1.4, 0.5, ts.rough * strength);
@@ -194,6 +214,20 @@ void main()
             s.shininess *= mix(1.0, gloss, strength);
             ambient = building_ambient(seed, p, shade_n);
         }
+    }
+    // Posters on shack walls and concrete at street level (close range only).
+    if ((mat == kMatSiding || mat == kMatShantyWall || mat == kMatConcrete) && abs(n.z) < 0.5 &&
+        distance(p, frame.camera_pos.xyz) < 80.0) {
+        vec4 poster = street_posters(u, v, face_seed);
+        s.albedo = mix(s.albedo, poster.rgb * 0.7, poster.w);
+        shade_n = mix(shade_n, n, poster.w);
+    }
+    // Weathering on walls: splash-back dirt near the ground and rain-washed streaks.
+    if (abs(n.z) < 0.5 && mat != kMatWindow && mat != kMatLed && mat != kMatLedRed && mat != kMatLantern) {
+        float splash = mix(0.55, 1.0, smoothstep(0.1, 1.3, v));
+        float streak = smoothstep(0.6, 0.85, value_noise(vec2(u * 1.7, v * 0.07) + float(seed & 127u))) *
+                       (0.6 + 0.4 * value_noise(vec2(u * 0.4, v * 0.5)));
+        s.albedo *= splash * (1.0 - 0.4 * streak);
     }
     if (mat == kMatCorrugated && n.z > 0.5) {
         // Tilt the shading normal across the ridges: long streak highlights down the sheet.

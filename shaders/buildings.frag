@@ -35,7 +35,7 @@ void main()
         float face_id = dot(n.xy, vec2(1.0, 2.0));
         uint face_seed = hash_u(seed ^ uint(int(face_id) + 3));
         if (shanty) {
-            shanty_wall(u, p.z, seed, face_seed, b.pos_size.w, true, s.albedo, s.emissive);
+            shanty_wall(u, p.z, seed, face_seed, b.pos_size.w, true, view_dir, n, s.albedo, s.emissive);
         } else {
             s = facade(u, p.z, seed, district, face_seed, n, view_dir, base_z < 0.5, false, true);
             float edge = b.pos_size.z * 0.5 - abs(u);

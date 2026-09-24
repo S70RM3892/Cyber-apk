@@ -317,8 +317,8 @@ void Renderer::create_static() {
         // Neutral stand-in until upload_materials: mid-grey albedo (x2 in the shader = 1),
         // flat normal, medium roughness.
         MaterialTextures neutral;
-        neutral.size = 1;
-        neutral.mips = 1;
+        neutral.size = neutral.nrm_size = 1;
+        neutral.mips = neutral.nrm_mips = 1;
         for (std::uint32_t i = 0; i < MaterialTextures::kLayers; ++i) {
             neutral.albedo.insert(neutral.albedo.end(), {188, 188, 188, 255});
             neutral.nrm.insert(neutral.nrm.end(), {128, 128, 128, 255});
@@ -919,7 +919,7 @@ void Renderer::upload_materials_images(const MaterialTextures& t) {
     const VkImageUsageFlags usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
     const std::uint32_t layers = MaterialTextures::kLayers;
     mat_albedo_ = vk::create_image(ctx_, {t.size, t.size}, VK_FORMAT_R8G8B8A8_SRGB, usage, t.mips, layers);
-    mat_nrm_ = vk::create_image(ctx_, {t.size, t.size}, VK_FORMAT_R8G8B8A8_UNORM, usage, t.mips, layers);
+    mat_nrm_ = vk::create_image(ctx_, {t.nrm_size, t.nrm_size}, VK_FORMAT_R8G8B8A8_UNORM, usage, t.nrm_mips, layers);
     const std::size_t bytes = t.albedo.size() + t.nrm.size();
     vk::Buffer staging = vk::create_buffer(ctx_, bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, true);
     std::memcpy(staging.mapped, t.albedo.data(), t.albedo.size());
@@ -933,8 +933,10 @@ void Renderer::upload_materials_images(const MaterialTextures& t) {
             // Data is layer-major, each layer a full mip chain.
             std::vector<VkBufferImageCopy> copies;
             VkDeviceSize offset = img == &mat_albedo_ ? 0 : t.albedo.size();
+            const bool alb = img == &mat_albedo_;
             for (std::uint32_t l = 0; l < layers; ++l)
-                for (std::uint32_t m = 0, s = t.size; m < t.mips; ++m, s = std::max(1u, s / 2)) {
+                for (std::uint32_t m = 0, s = alb ? t.size : t.nrm_size; m < (alb ? t.mips : t.nrm_mips);
+                     ++m, s = std::max(1u, s / 2)) {
                     VkBufferImageCopy c{};
                     c.bufferOffset = offset;
                     c.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, m, l, 1};

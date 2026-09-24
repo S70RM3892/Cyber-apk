@@ -60,8 +60,8 @@ void main()
     vec3 ground_n = vec3(0.0, 0.0, 1.0);
     float tex_rough = 0.5;
     if (tex_strength > 0.0) {
-        TexSample ta = sample_material(kTexAsphalt, p, 5.0, vec3(0, 0, 1), vec3(1, 0, 0), vec3(0, 1, 0), tex_strength);
-        TexSample tp = sample_material(kTexPaving, p, 3.0, vec3(0, 0, 1), vec3(1, 0, 0), vec3(0, 1, 0), tex_strength);
+        TexSample ta = sample_material(kTexAsphalt, p, 5.0, vec3(0, 0, 1), vec3(1, 0, 0), vec3(0, 1, 0), tex_strength, 1.0);
+        TexSample tp = sample_material(kTexPaving, p, 3.0, vec3(0, 0, 1), vec3(1, 0, 0), vec3(0, 1, 0), tex_strength, 1.0);
         float r = road;
         albedo *= mix(tp.tint, ta.tint, r);
         ground_n = normalize(mix(tp.normal, ta.normal, r));

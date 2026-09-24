@@ -280,7 +280,7 @@ void test_mesh_no_degenerate_normals() {
 }
 
 void test_material_textures() {
-    // Every shipped layer decodes to the same square size with a full mip chain, and the
+    // Every shipped layer decodes to its array's square size with a full mip chain, and the
     // packed normals are centred (flat on average), so shading isn't tilted.
     const auto t = load_material_textures([](const std::string& name) -> std::optional<std::vector<std::uint8_t>> {
         std::ifstream f(std::string(APEX_ASSET_DIR) + "/" + name, std::ios::binary);
@@ -289,11 +289,12 @@ void test_material_textures() {
     });
     CHECK(t.has_value());
     if (!t) return;
-    CHECK(t->size == 512 && t->mips == 10);
+    CHECK(t->size == 1024 && t->mips == 11);
+    CHECK(t->nrm_size == 512 && t->nrm_mips == 10);
     CHECK(t->albedo.size() == t->layer_bytes() * MaterialTextures::kLayers);
-    CHECK(t->nrm.size() == t->albedo.size());
+    CHECK(t->nrm.size() == t->nrm_layer_bytes() * MaterialTextures::kLayers);
     for (std::uint32_t l = 0; l < MaterialTextures::kLayers; ++l) {
-        const std::uint8_t* last = t->nrm.data() + (l + 1) * t->layer_bytes() - 4;  // 1x1 mip
+        const std::uint8_t* last = t->nrm.data() + (l + 1) * t->nrm_layer_bytes() - 4;  // 1x1 mip
         CHECK(std::abs(static_cast<int>(last[0]) - 128) < 20 && std::abs(static_cast<int>(last[1]) - 128) < 20);
     }
 }
