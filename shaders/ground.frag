@@ -12,6 +12,7 @@ layout(location = 0) in vec3 in_world_pos;
 
 layout(location = 0) out vec4 out_color;
 layout(location = 1) out vec4 out_material;
+layout(location = 2) out vec4 out_albedo;    // RT G-buffer (0: not lit by the ray-traced pass)
 
 const float kRoadRange = 32.0;      // RoadField::kRange
 
@@ -19,6 +20,7 @@ float aa_step(float edge, float x, float w) { return clamp((x - edge) / max(w, 1
 
 void main()
 {
+    out_albedo = vec4(0.0);
     vec2 p = in_world_pos.xy;
     float t = frame.camera_pos.w;
 
@@ -94,18 +96,15 @@ void main()
     vec3 neon_diffuse, neon_spec;
     // Puddles are flat water; elsewhere the texture's relief catches the neon.
     vec3 light_n = normalize(mix(ground_n, vec3(0.0, 0.0, 1.0), puddle));
+#ifdef APEX_RT
+    neon_diffuse = vec3(0.0);  // rt_light.frag
+    neon_spec = vec3(0.0);
+#else
     local_lights(vec3(p, 0.02), light_n, view_dir, mix(40.0, 600.0, puddle), neon_diffuse, neon_spec);
+#endif
     // Neon on the ground reads mostly as coloured wet sheen, so the diffuse term uses a
     // brighter "wet film" albedo than the dark asphalt itself.
     vec3 neon_albedo = mix(vec3(0.05), albedo * 2.0, 0.5);
-#ifdef APEX_RT
-    // Contact shadow along walls, under cars' parking bays, clutter and stairs.
-    float ao = rt_ambient_occlusion(vec3(p, 0.0), vec3(0.0, 0.0, 1.0));
-    ambient *= ao;
-    lamps *= mix(0.4, 1.0, ao);
-    spill *= mix(0.4, 1.0, ao);
-    neon_diffuse *= mix(0.55, 1.0, ao);
-#endif
     vec3 lit = albedo * (ambient * 4.0 + lamps + spill_col * spill * 8.0 + day_light(vec3(p, 0.0), ground_n) * 1.6) +
                neon_albedo * neon_diffuse +
                neon_spec * mix(0.25, 0.9, puddle) * rain;
@@ -128,4 +127,11 @@ void main()
     vec2 perturb = ripple + ground_n.xy * 0.6 * (1.0 - puddle);
     rough = mix(rough, clamp(rough + (tex_rough - 0.5) * 0.4, 0.03, 0.8), 1.0 - puddle);
     out_material = vec4(wet, rough, perturb * 0.5 + 0.5);
+#ifdef APEX_RT
+    // Ray-traced lighting adds the neon; the fake street lamps and spill stay here.
+    out_color = vec4(apply_fog(albedo * (lamps + spill_col * spill * 8.0), in_world_pos), 1.0);
+    out_albedo = vec4(neon_albedo, floor(clamp(mix(40.0, 600.0, puddle), 4.0, 508.0) / 4.0) +
+                                       clamp(mix(0.25, 0.9, puddle) * rain * 0.5, 0.0, 0.99));
+    out_material.ba = oct_encode(light_n);
+#endif
 }

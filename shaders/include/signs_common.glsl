@@ -13,6 +13,7 @@ layout(location = 2) flat in uint in_instance;
 
 layout(location = 0) out vec4 out_color;
 layout(location = 1) out vec4 out_material;
+layout(location = 2) out vec4 out_albedo;  // RT G-buffer: signs are emissive only
 
 const uint kWallPanel = 0u, kBlade = 1u, kRooftop = 2u, kScreen = 3u, kNeonText = 4u;
 
@@ -217,6 +218,7 @@ vec3 screen_ad(vec2 uv, uint seed, uint text, float t, vec2 size, uint forced)
 
 void main()
 {
+    out_albedo = vec4(0.0);
     Sign s = signs[in_instance];
     uint style = s.style & 0xFFu;
     uint text = (s.style >> 8u) & 0xFFu;

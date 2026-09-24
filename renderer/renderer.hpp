@@ -98,6 +98,10 @@ private:
     // Size-dependent targets
     vk::Image scene_color_, scene_material_, depth_, resolved_;
     std::array<vk::Image, 2> taa_{};  // TAA history ping-pong (frame parity writes, the other is read)
+    // Ray-traced lighting (rt_ only): G-buffer albedo, raw estimates, history, filter.
+    vk::Image albedo_, rt_irr_, rt_spec_;
+    std::array<vk::Image, 2> irr_hist_{}, meta_hist_{}, atrous_{};
+    bool rt_hist_valid_ = false;
     std::array<vk::Image, kBloomLevels> bloom_{};
 
     // Data
@@ -129,6 +133,9 @@ private:
     VkDescriptorSet resolve_set_ = VK_NULL_HANDLE;
     VkDescriptorSet tonemap_set_ = VK_NULL_HANDLE;
     std::array<VkDescriptorSet, 2> taa_sets_{}, bloom0_sets_{}, tonemap_sets_{};  // per TAA parity
+    VkDescriptorSet rt_light_set_ = VK_NULL_HANDLE, rt_composite_set_ = VK_NULL_HANDLE;
+    std::array<VkDescriptorSet, 2> rt_accum_sets_{};
+    std::array<std::array<VkDescriptorSet, 3>, 2> rt_atrous_sets_{};  // [parity][pass]
     bool taa_valid_ = false;          // history holds a previous frame at this size
     std::uint32_t frame_index_ = 0;
     Mat4 prev_view_proj_;
@@ -149,6 +156,9 @@ private:
                halo_pso_ = VK_NULL_HANDLE, box_pso_ = VK_NULL_HANDLE;
     VkPipeline resolve_pso_ = VK_NULL_HANDLE, bloom_down_pso_ = VK_NULL_HANDLE, bloom_up_pso_ = VK_NULL_HANDLE,
                tonemap_pso_ = VK_NULL_HANDLE, taa_pso_ = VK_NULL_HANDLE;
+    VkPipeline rt_light_pso_ = VK_NULL_HANDLE, rt_accum_pso_ = VK_NULL_HANDLE, rt_atrous_pso_ = VK_NULL_HANDLE,
+               rt_composite_pso_ = VK_NULL_HANDLE;
+    void record_rt_lighting(VkCommandBuffer cmd, std::uint32_t slot);
 
     // HUD
     static constexpr std::uint32_t kMaxHudQuads = 4096;

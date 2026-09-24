@@ -7,9 +7,11 @@
 layout(location = 0) in vec2 in_uv;
 layout(location = 0) out vec4 out_color;
 layout(location = 1) out vec4 out_material;
+layout(location = 2) out vec4 out_albedo;    // RT G-buffer (0: not lit by the ray-traced pass)
 
 void main()
 {
+    out_albedo = vec4(0.0);
     vec4 clip = vec4(in_uv * 2.0 - 1.0, 1e-4, 1.0);
     vec4 wp = frame.inv_view_proj * clip;
     vec3 dir = normalize(wp.xyz / wp.w - frame.camera_pos.xyz);

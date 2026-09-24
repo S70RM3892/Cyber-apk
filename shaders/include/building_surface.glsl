@@ -54,19 +54,32 @@ Surface surface_default()
     return s;
 }
 
+#ifdef APEX_RT
+// Ray-traced lighting (rt_light.frag) lights the surface later from the G-buffer; the
+// scene pass keeps only what glows. shade_surface stores the rest here for main().
+vec4 g_rt_albedo = vec4(0.0);
+vec3 g_rt_normal = vec3(0.0, 0.0, 1.0);
+#endif
+
+// Albedo target alpha: shininess / 4 in the integer part, specular weight / 2 in the
+// fraction (rt_light.frag unpacks it).
+float pack_specular(float specular, float shininess)
+{
+    return floor(clamp(shininess, 4.0, 508.0) / 4.0) + clamp(specular * 0.5, 0.0, 0.99);
+}
+
 // Final radiance of a building surface: ambient + neon / shopfront lights, highlights.
 vec3 shade_surface(Surface s, vec3 p, vec3 n, vec3 view_dir, vec3 ambient)
 {
+#ifdef APEX_RT
+    g_rt_albedo = vec4(s.albedo, pack_specular(s.specular, s.shininess));
+    g_rt_normal = n;
+    return s.emissive;
+#else
     vec3 diffuse, spec;
     local_lights(p, n, view_dir, s.shininess, diffuse, spec);
-#ifdef APEX_RT
-    // Ray-traced AO: corners, undersides and cluttered roofs sink into shadow; it takes
-    // part of the direct neon too (large sources wrap into corners less than the model says).
-    float ao = rt_ambient_occlusion(p, n);
-    ambient *= ao;
-    diffuse *= mix(0.55, 1.0, ao);
-#endif
     return s.albedo * (ambient + diffuse * 0.6 + day_light(p, n)) + s.emissive + spec * s.specular;
+#endif
 }
 
 // Anti-aliased box: 1 inside [lo, hi], filtered over the pixel footprint w.

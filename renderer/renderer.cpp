@@ -37,6 +37,8 @@ static_assert(sizeof(FrameUniforms) == 448);
 
 constexpr VkFormat kSceneColorFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
 constexpr VkFormat kMaterialFormat = VK_FORMAT_R8G8B8A8_UNORM;
+constexpr VkFormat kLightFormat = VK_FORMAT_R16G16B16A16_SFLOAT;  // RT albedo, irradiance, specular
+constexpr VkFormat kMetaFormat = VK_FORMAT_R16G16_SFLOAT;         // RT history: linear depth, samples
 constexpr std::uint32_t kPlayerCarInstance = 1u << 20;  // traffic.vert kPlayerCar
 
 // Inverse of an invertible 4x4 (cofactor expansion). Only used once per frame.
@@ -252,7 +254,8 @@ Renderer::~Renderer() {
     for (VkPipeline p : {ground_pso_, buildings_pso_, signs_pso_, sky_pso_, rain_pso_, traffic_pso_, streetlife_pso_,
                          beacon_pso_, signs_glow_pso_, props_pso_, lights_pso_, infra_pso_, detail_pso_, halo_pso_, box_pso_, resolve_pso_,
                          bloom_down_pso_,
-                         bloom_up_pso_, tonemap_pso_, taa_pso_})
+                         bloom_up_pso_, tonemap_pso_, taa_pso_, rt_light_pso_, rt_accum_pso_, rt_atrous_pso_,
+                         rt_composite_pso_})
         vkDestroyPipeline(dev, p, nullptr);
     vkDestroyPipeline(dev, hud_pso_, nullptr);
     vkDestroyPipelineLayout(dev, hud_layout_, nullptr);
@@ -426,12 +429,12 @@ void Renderer::create_static() {
         VK_CHECK(vkCreateDescriptorSetLayout(dev, &ci, nullptr, &scene_set_layout_));
     }
     {
-        VkDescriptorSetLayoutBinding b[4]{};
+        VkDescriptorSetLayoutBinding b[6]{};
         b[0] = {0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
-        for (std::uint32_t i = 1; i < 4; ++i)
+        for (std::uint32_t i = 1; i < 6; ++i)
             b[i] = {i, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
         VkDescriptorSetLayoutCreateInfo ci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-        ci.bindingCount = 4;
+        ci.bindingCount = 6;
         ci.pBindings = b;
         VK_CHECK(vkCreateDescriptorSetLayout(dev, &ci, nullptr, &post_set_layout_));
     }
@@ -630,7 +633,8 @@ void Renderer::ensure_buffer(vk::Buffer& b, VkDeviceSize size, VkBufferUsageFlag
 
 void Renderer::create_pipelines() {
     namespace sh = apex::shaders;
-    const std::vector<VkFormat> scene_formats{kSceneColorFormat, kMaterialFormat};
+    std::vector<VkFormat> scene_formats{kSceneColorFormat, kMaterialFormat};
+    if (rt_) scene_formats.push_back(kLightFormat);  // G-buffer albedo for ray-traced lighting
 
     PipelineDesc d;
     d.layout = scene_layout_;
@@ -744,6 +748,25 @@ void Renderer::create_pipelines() {
     p.fs = sh::taa_frag;
     taa_pso_ = make_pipeline(ctx_, p);
 
+    if (rt_) {
+        PipelineDesc r = p;
+        r.layout = resolve_rt_layout_;
+        r.fs = sh::rt_light_rt_frag;
+        r.color_formats = {kLightFormat, kLightFormat};
+        rt_light_pso_ = make_pipeline(ctx_, r);
+        r.layout = post_layout_;
+        r.fs = sh::rt_accum_frag;
+        r.color_formats = {kLightFormat, kMetaFormat};
+        rt_accum_pso_ = make_pipeline(ctx_, r);
+        r.fs = sh::rt_atrous_frag;
+        r.color_formats = {kLightFormat};
+        rt_atrous_pso_ = make_pipeline(ctx_, r);
+        r.fs = sh::rt_composite_frag;
+        r.color_formats = {kSceneColorFormat};
+        r.blend = Blend::Additive;
+        rt_composite_pso_ = make_pipeline(ctx_, r);
+    }
+
     p.color_formats = {bloom_format_};
     p.fs = sh::bloom_down_frag;
     bloom_down_pso_ = make_pipeline(ctx_, p);
@@ -773,6 +796,15 @@ void Renderer::create_sized() {
     resolved_ = vk::create_image(ctx_, internal_, kSceneColorFormat, rt);
     for (auto& t : taa_) t = vk::create_image(ctx_, internal_, kSceneColorFormat, rt);
     taa_valid_ = false;
+    if (rt_) {
+        albedo_ = vk::create_image(ctx_, internal_, kLightFormat, rt);
+        rt_irr_ = vk::create_image(ctx_, internal_, kLightFormat, rt);
+        rt_spec_ = vk::create_image(ctx_, internal_, kLightFormat, rt);
+        for (auto& i : irr_hist_) i = vk::create_image(ctx_, internal_, kLightFormat, rt);
+        for (auto& i : meta_hist_) i = vk::create_image(ctx_, internal_, kMetaFormat, rt);
+        for (auto& i : atrous_) i = vk::create_image(ctx_, internal_, kLightFormat, rt);
+        rt_hist_valid_ = false;
+    }
     VkExtent2D e = internal_;
     for (auto& b : bloom_) {
         e = {std::max(1u, e.width / 2), std::max(1u, e.height / 2)};
@@ -780,16 +812,18 @@ void Renderer::create_sized() {
     }
 
     VkDevice dev = ctx_.device();
-    constexpr std::uint32_t kSets = 2 + 2 * kBloomLevels + 6;
+    constexpr std::uint32_t kSets = 2 + 2 * kBloomLevels + 6 + 10;
     VkDescriptorPoolSize sizes[] = {{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, kSets},
-                                    {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kSets * 3}};
+                                    {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kSets * 5}};
     VkDescriptorPoolCreateInfo ci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
     ci.maxSets = kSets;
     ci.poolSizeCount = 2;
     ci.pPoolSizes = sizes;
     VK_CHECK(vkCreateDescriptorPool(dev, &ci, nullptr, &sized_pool_));
 
-    auto alloc = [&](VkImageView a, VkSampler sa, VkImageView b, VkSampler sb, VkImageView c, VkSampler sc) {
+    // Post sets: UBO + up to 5 images (bindings 1-5). Unused slots still need a valid
+    // descriptor; they point at the first image.
+    auto alloc_n = [&](std::initializer_list<std::pair<VkImageView, VkSampler>> images) {
         VkDescriptorSet set;
         VkDescriptorSetAllocateInfo ai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
         ai.descriptorPool = sized_pool_;
@@ -797,26 +831,33 @@ void Renderer::create_sized() {
         ai.pSetLayouts = &post_set_layout_;
         VK_CHECK(vkAllocateDescriptorSets(dev, &ai, &set));
         VkDescriptorBufferInfo ubo{frame_ubo_.buffer, 0, sizeof(FrameUniforms)};
-        // Unused slots still need a valid descriptor; point them at binding 1's image.
-        VkDescriptorImageInfo imgs[3] = {{sa, a, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-                                         {sb ? sb : sa, b ? b : a, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-                                         {sc ? sc : sa, c ? c : a, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}};
-        VkWriteDescriptorSet w[4]{};
-        for (std::uint32_t i = 0; i < 4; ++i) {
-            w[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            w[i].dstSet = set;
-            w[i].dstBinding = i;
-            w[i].descriptorCount = 1;
-            if (i == 0) {
-                w[i].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
-                w[i].pBufferInfo = &ubo;
+        VkDescriptorImageInfo imgs[5];
+        const auto first = *images.begin();
+        std::size_t i = 0;
+        for (const auto& [view, sampler] : images) {
+            imgs[i++] = {sampler ? sampler : first.second, view ? view : first.first,
+                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+        }
+        for (; i < 5; ++i) imgs[i] = {first.second, first.first, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+        VkWriteDescriptorSet w[6]{};
+        for (std::uint32_t k = 0; k < 6; ++k) {
+            w[k].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w[k].dstSet = set;
+            w[k].dstBinding = k;
+            w[k].descriptorCount = 1;
+            if (k == 0) {
+                w[k].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
+                w[k].pBufferInfo = &ubo;
             } else {
-                w[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-                w[i].pImageInfo = &imgs[i - 1];
+                w[k].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                w[k].pImageInfo = &imgs[k - 1];
             }
         }
-        vkUpdateDescriptorSets(dev, 4, w, 0, nullptr);
+        vkUpdateDescriptorSets(dev, 6, w, 0, nullptr);
         return set;
+    };
+    auto alloc = [&](VkImageView a, VkSampler sa, VkImageView b, VkSampler sb, VkImageView c, VkSampler sc) {
+        return alloc_n({{a, sa}, {b, sb}, {c, sc}});
     };
 
     resolve_set_ = alloc(scene_color_.view, linear_clamp_, scene_material_.view, point_clamp_, depth_.view, point_clamp_);
@@ -834,6 +875,20 @@ void Renderer::create_sized() {
         bloom0_sets_[i] = alloc(taa_[i].view, linear_clamp_, VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE);
         tonemap_sets_[i] = alloc(taa_[i].view, linear_clamp_, bloom_[0].view, linear_clamp_, VK_NULL_HANDLE, VK_NULL_HANDLE);
     }
+    if (rt_) {
+        const VkSampler pc = point_clamp_;
+        rt_light_set_ = alloc_n({{scene_material_.view, pc}, {albedo_.view, pc}, {depth_.view, pc}});
+        for (std::uint32_t par = 0; par < 2; ++par) {
+            rt_accum_sets_[par] = alloc_n({{rt_irr_.view, pc}, {irr_hist_[1 - par].view, pc},
+                                           {meta_hist_[1 - par].view, pc}, {depth_.view, pc}});
+            // Filter passes: history -> atrous 0 -> atrous 1 -> atrous 0.
+            const VkImageView inputs[3] = {irr_hist_[par].view, atrous_[0].view, atrous_[1].view};
+            for (int k = 0; k < 3; ++k)
+                rt_atrous_sets_[par][static_cast<std::size_t>(k)] =
+                    alloc_n({{inputs[k], pc}, {depth_.view, pc}, {scene_material_.view, pc}, {meta_hist_[par].view, pc}});
+        }
+        rt_composite_set_ = alloc_n({{atrous_[0].view, pc}, {rt_spec_.view, pc}, {albedo_.view, pc}, {depth_.view, pc}});
+    }
     if (scene_set_) write_scene_set();  // the halo pass samples the new depth target
 }
 
@@ -843,6 +898,9 @@ void Renderer::destroy_sized() {
     vk::destroy(ctx_, depth_);
     vk::destroy(ctx_, resolved_);
     for (auto& t : taa_) vk::destroy(ctx_, t);
+    for (vk::Image* i : {&albedo_, &rt_irr_, &rt_spec_, &irr_hist_[0], &irr_hist_[1], &meta_hist_[0], &meta_hist_[1],
+                         &atrous_[0], &atrous_[1]})
+        vk::destroy(ctx_, *i);
     for (auto& b : bloom_) vk::destroy(ctx_, b);
     if (sized_pool_) vkDestroyDescriptorPool(ctx_.device(), sized_pool_, nullptr);
     sized_pool_ = VK_NULL_HANDLE;
@@ -1092,7 +1150,11 @@ void Renderer::record(VkCommandBuffer cmd, std::uint32_t slot, const Game& game,
         };
         vk::transition(ctx_, cmd, ts);
 
-        VkRenderingAttachmentInfo colors[2]{};
+        if (rt_)
+            vk::transition(ctx_, cmd, {albedo_.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                                       kAnyFragmentWork, 0, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                                       VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT});
+        VkRenderingAttachmentInfo colors[3]{};
         for (auto& c : colors) {
             c.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
             c.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
@@ -1102,6 +1164,7 @@ void Renderer::record(VkCommandBuffer cmd, std::uint32_t slot, const Game& game,
         colors[0].imageView = scene_color_.view;
         colors[1].imageView = scene_material_.view;
         colors[1].clearValue.color = {{0.0f, 1.0f, 0.5f, 0.5f}};
+        colors[2].imageView = albedo_.view;  // rt_ only (colorAttachmentCount below)
         VkRenderingAttachmentInfo depth{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
         depth.imageView = depth_.view;
         depth.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
@@ -1112,7 +1175,7 @@ void Renderer::record(VkCommandBuffer cmd, std::uint32_t slot, const Game& game,
         VkRenderingInfo ri{VK_STRUCTURE_TYPE_RENDERING_INFO};
         ri.renderArea = {{0, 0}, internal_};
         ri.layerCount = 1;
-        ri.colorAttachmentCount = 2;
+        ri.colorAttachmentCount = rt_ ? 3 : 2;
         ri.pColorAttachments = colors;
         ri.pDepthAttachment = &depth;
         fns.cmd_begin_rendering(cmd, &ri);
@@ -1194,16 +1257,23 @@ void Renderer::record(VkCommandBuffer cmd, std::uint32_t slot, const Game& game,
         fns.cmd_end_rendering(cmd);
     }
 
+    // ---- Ray-traced lighting (G-buffer -> denoised light added into scene colour) --
+    const bool rt_lit = rt_ && rt_->tlas();
+    if (rt_lit) record_rt_lighting(cmd, slot);
+    // After ray-traced lighting the material and depth targets are already readable.
+    const VkImageLayout mat_old = rt_lit ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    const VkImageLayout depth_old = rt_lit ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+
     // ---- SSR resolve ---------------------------------------------------------------
     {
         const ImageTransition ts[] = {
             {scene_color_.image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
              VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
              VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT},
-            {scene_material_.image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            {scene_material_.image, mat_old, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
              VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
              VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT},
-            {depth_.image, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            {depth_.image, depth_old, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
              VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT, VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
              VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT, VK_IMAGE_ASPECT_DEPTH_BIT},
             {resolved_.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, kAnyFragmentWork, 0,
@@ -1375,6 +1445,104 @@ void Renderer::record(VkCommandBuffer cmd, std::uint32_t slot, const Game& game,
         vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, timestamps_, 2 * slot + 1);
         timestamps_written_[slot] = true;
     }
+}
+
+void Renderer::record_rt_lighting(VkCommandBuffer cmd, std::uint32_t slot) {
+    const auto& fns = ctx_.fns();
+    const std::uint32_t par = frame_index_ & 1u;  // same parity as TAA (frame_index_ advances after it)
+    const std::uint32_t offset = static_cast<std::uint32_t>(slot * ubo_stride_);
+    auto to_read = [&](VkImage img, VkImageLayout from, VkImageAspectFlags aspect = VK_IMAGE_ASPECT_COLOR_BIT) {
+        const bool depth = aspect == VK_IMAGE_ASPECT_DEPTH_BIT;
+        vk::transition(ctx_, cmd, {img, from, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                   depth ? VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT
+                                         : VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                                   depth ? VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT : VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                                   VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT, aspect});
+    };
+    auto to_write = [&](VkImage img) {
+        vk::transition(ctx_, cmd, {img, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                                   kAnyFragmentWork, 0, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                                   VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT});
+    };
+    // Fullscreen triangle into 1-2 targets.
+    auto pass = [&](std::initializer_list<VkImageView> targets, VkPipeline pso, VkPipelineLayout layout,
+                    VkDescriptorSet set, bool scene_set, const void* push, std::uint32_t push_size, bool load) {
+        VkRenderingAttachmentInfo att[2]{};
+        std::uint32_t n = 0;
+        for (VkImageView v : targets) {
+            att[n].sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+            att[n].imageView = v;
+            att[n].imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            att[n].loadOp = load ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+            att[n].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+            ++n;
+        }
+        VkRenderingInfo ri{VK_STRUCTURE_TYPE_RENDERING_INFO};
+        ri.renderArea = {{0, 0}, internal_};
+        ri.layerCount = 1;
+        ri.colorAttachmentCount = n;
+        ri.pColorAttachments = att;
+        fns.cmd_begin_rendering(cmd, &ri);
+        set_viewport(cmd, internal_);
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pso);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1, &set, 1, &offset);
+        if (scene_set) vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 1, 1, &scene_set_, 1, &offset);
+        if (push_size) vkCmdPushConstants(cmd, layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, push_size, push);
+        vkCmdDraw(cmd, 3, 1, 0, 0);
+        fns.cmd_end_rendering(cmd);
+    };
+
+    // G-buffer readable; scene colour stays an attachment for the composite.
+    to_read(scene_material_.image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+    to_read(albedo_.image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+    to_read(depth_.image, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, VK_IMAGE_ASPECT_DEPTH_BIT);
+    if (!rt_hist_valid_)  // first frame at this size: give the history a defined layout
+        for (vk::Image* h : {&irr_hist_[1 - par], &meta_hist_[1 - par]})
+            vk::transition(ctx_, cmd, {h->image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                       kAnyFragmentWork, 0, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                                       VK_ACCESS_2_SHADER_SAMPLED_READ_BIT});
+
+    // 1. Noisy estimate.
+    to_write(rt_irr_.image);
+    to_write(rt_spec_.image);
+    pass({rt_irr_.view, rt_spec_.view}, rt_light_pso_, resolve_rt_layout_, rt_light_set_, true, nullptr, 0, false);
+    to_read(rt_irr_.image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+    to_read(rt_spec_.image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+
+    // 2. Temporal accumulation into this parity's history.
+    to_write(irr_hist_[par].image);
+    to_write(meta_hist_[par].image);
+    const std::int32_t reset[4] = {rt_hist_valid_ ? 0 : 1, 0, 0, 0};
+    pass({irr_hist_[par].view, meta_hist_[par].view}, rt_accum_pso_, post_layout_, rt_accum_sets_[par], false, reset,
+         sizeof(reset), false);
+    to_read(irr_hist_[par].image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+    to_read(meta_hist_[par].image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+    rt_hist_valid_ = true;
+
+    // 3. A-trous filter: history -> atrous 0 -> atrous 1 -> atrous 0 (steps 1, 2, 4).
+    const std::uint32_t outs[3] = {0, 1, 0};
+    for (int k = 0; k < 3; ++k) {
+        vk::Image& out = atrous_[outs[k]];
+        to_write(out.image);
+        const std::int32_t step[4] = {1 << k, 0, 0, 0};
+        pass({out.view}, rt_atrous_pso_, post_layout_, rt_atrous_sets_[par][static_cast<std::size_t>(k)], false, step,
+             sizeof(step), false);
+        to_read(out.image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+    }
+
+    // 4. Composite: additive into the scene colour (still an attachment).
+    {
+        VkMemoryBarrier2 mb{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+        mb.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+        mb.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+        mb.dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+        mb.dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+        VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+        di.memoryBarrierCount = 1;
+        di.pMemoryBarriers = &mb;
+        fns.cmd_pipeline_barrier2(cmd, &di);
+    }
+    pass({scene_color_.view}, rt_composite_pso_, post_layout_, rt_composite_set_, false, nullptr, 0, true);
 }
 
 void Renderer::update_dynamic_resolution() {

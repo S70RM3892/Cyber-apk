@@ -11,11 +11,13 @@ layout(location = 4) flat in vec3 in_size;
 
 layout(location = 0) out vec4 out_color;
 layout(location = 1) out vec4 out_material;
+layout(location = 2) out vec4 out_albedo;    // RT G-buffer (0: not lit by the ray-traced pass)
 
 const uint kAc = 0u, kTank = 1u, kMast = 2u, kFrame = 3u;
 
 void main()
 {
+    out_albedo = vec4(0.0);
     uint kind = in_kind_seed & 0xFFu;
     uint seed = in_kind_seed >> 8u;
     vec3 n = in_normal;

@@ -13,9 +13,11 @@ layout(location = 4) flat in vec3 in_half;
 
 layout(location = 0) out vec4 out_color;
 layout(location = 1) out vec4 out_material;
+layout(location = 2) out vec4 out_albedo;    // RT G-buffer (0: not lit by the ray-traced pass)
 
 void main()
 {
+    out_albedo = vec4(0.0);
     vec3 p = in_world_pos;
     vec3 n = in_normal;
     float stain = 0.7 + 0.3 * value_noise(p.xy * 0.15 + p.z * 0.3);

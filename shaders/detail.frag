@@ -11,11 +11,13 @@ layout(location = 4) flat in uint in_material;
 
 layout(location = 0) out vec4 out_color;
 layout(location = 1) out vec4 out_material;
+layout(location = 2) out vec4 out_albedo;    // RT G-buffer (0: not lit by the ray-traced pass)
 
 const float kFaceStride = 256.0;  // city_mesh.hpp
 
 void main()
 {
+    out_albedo = vec4(0.0);
     Building b = buildings[in_building];
     uint seed = b.seed_district_flags_base.x;
     uint district = b.seed_district_flags_base.y;
@@ -199,4 +201,8 @@ void main()
     }
     out_color = vec4(apply_fog(shade_surface(s, p, shade_n, view_dir, ambient), p), 1.0);
     out_material = s.material;
+#ifdef APEX_RT
+    out_albedo = g_rt_albedo;
+    out_material.ba = oct_encode(g_rt_normal);
+#endif
 }

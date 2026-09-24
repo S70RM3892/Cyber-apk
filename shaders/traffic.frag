@@ -12,9 +12,11 @@ layout(location = 4) flat in int in_part;
 
 layout(location = 0) out vec4 out_color;
 layout(location = 1) out vec4 out_material;
+layout(location = 2) out vec4 out_albedo;    // RT G-buffer (0: not lit by the ray-traced pass)
 
 void main()
 {
+    out_albedo = vec4(0.0);
     vec3 l = in_local;
     vec3 nl = in_normal_local;
     bool player = in_id == (1u << 20);

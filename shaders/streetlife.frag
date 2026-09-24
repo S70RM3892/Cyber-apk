@@ -13,9 +13,11 @@ layout(location = 4) in vec3 in_local;
 
 layout(location = 0) out vec4 out_color;
 layout(location = 1) out vec4 out_material;
+layout(location = 2) out vec4 out_albedo;    // RT G-buffer (0: not lit by the ray-traced pass)
 
 void main()
 {
+    out_albedo = vec4(0.0);
     vec3 p = in_world_pos;
     vec3 n = normalize(in_normal);
     uint part = in_kind_part.y;

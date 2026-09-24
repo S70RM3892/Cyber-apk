@@ -5,19 +5,20 @@
 
 #include "frame_ubo.glsl"
 
+#ifndef APEX_SCENE_SET
+#define APEX_SCENE_SET 0  // the scene descriptor set (1 in the ray-traced lighting pass)
+#endif
+
 struct PointLight {
     vec4 pos_radius;
     vec4 color;  // rgb intensity, w source radius (metres, soft shadows)
 };
-layout(set = 0, binding = 8, std430) readonly buffer PointLights { PointLight point_lights[]; };
-layout(set = 0, binding = 9, std430) readonly buffer LightGrid { uint light_grid[]; };
+layout(set = APEX_SCENE_SET, binding = 8, std430) readonly buffer PointLights { PointLight point_lights[]; };
+layout(set = APEX_SCENE_SET, binding = 9, std430) readonly buffer LightGrid { uint light_grid[]; };
 
 const int kLightGridSize = 128;  // world.hpp
 
 #ifdef APEX_RT
-#ifndef APEX_SCENE_SET
-#define APEX_SCENE_SET 0
-#endif
 layout(set = APEX_SCENE_SET, binding = 15) uniform accelerationStructureEXT scene_tlas;
 const uint kRtMaskWorld = 0x01u, kRtMaskSigns = 0x02u;  // rt_scene.hpp
 

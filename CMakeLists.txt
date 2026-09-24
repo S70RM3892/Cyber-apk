@@ -51,7 +51,7 @@ set(APEX_SHADERS
     fullscreen.vert sky.frag rain.vert rain.frag traffic.vert traffic.frag hud.vert hud.frag
     streetlife.vert streetlife.frag beacon.vert beacon.frag signs_glow.frag
     props.vert props.frag lights.vert lights.frag infra.vert infra.frag detail.vert detail.frag halo.vert halo.frag box_detail.vert
-    resolve.frag taa.frag bloom_down.frag bloom_up.frag tonemap.frag
+    resolve.frag taa.frag bloom_down.frag bloom_up.frag tonemap.frag rt_accum.frag rt_atrous.frag rt_composite.frag
 )
 file(GLOB APEX_SHADER_INCLUDES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/shaders/include/*.glsl)
 set(APEX_SPV_DIR ${CMAKE_CURRENT_BINARY_DIR}/spv)
@@ -75,7 +75,7 @@ foreach(s IN LISTS APEX_SHADERS)
 endforeach()
 # Ray-query variants (-DAPEX_RT): used only on devices with VK_KHR_ray_query, since a
 # module that declares the RayQueryKHR capability can't be loaded anywhere else.
-set(APEX_RT_SHADERS detail.frag buildings.frag ground.frag resolve.frag)
+set(APEX_RT_SHADERS detail.frag buildings.frag ground.frag resolve.frag rt_light.frag)
 foreach(s IN LISTS APEX_RT_SHADERS)
     set(src ${CMAKE_CURRENT_SOURCE_DIR}/shaders/${s})
     string(REGEX REPLACE "\\.([a-z]+)$" "_rt.\\1" rt_name ${s})

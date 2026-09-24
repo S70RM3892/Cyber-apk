@@ -139,6 +139,14 @@ void RtScene::build(const CitySnapshot& snap, float radius) {
         for (float line = std::ceil(lo_y / kHighwayEvery) * kHighwayEvery; line <= hi_y; line += kHighwayEvery)
             add_box(p, idx, cx, line, 25.0f - 1.3f, 0.0f, radius, 5.8f, 1.3f);
     }
+    // The street: bounce rays that go down must find it (shop light pooled on the ground
+    // is most of the indirect light in an alley).
+    {
+        const auto base = static_cast<std::uint32_t>(p.size() / 3);
+        p.insert(p.end(), {cx - radius, cy - radius, 0.0f, cx + radius, cy - radius, 0.0f, cx + radius, cy + radius, 0.0f,
+                           cx - radius, cy + radius, 0.0f});
+        idx.insert(idx.end(), {base, base + 1, base + 2, base, base + 2, base + 3});
+    }
     const auto world_tris = static_cast<std::uint32_t>(idx.size() / 3);
     build_blas(world_, world_pos_, world_idx_, p, &idx, world_tris);
 

@@ -10,9 +10,11 @@ layout(location = 2) flat in uint in_instance;
 
 layout(location = 0) out vec4 out_color;     // HDR radiance
 layout(location = 1) out vec4 out_material;  // r reflectivity, g roughness, ba normal perturbation
+layout(location = 2) out vec4 out_albedo;    // RT G-buffer (0: not lit by the ray-traced pass)
 
 void main()
 {
+    out_albedo = vec4(0.0);
     Building b = buildings[in_instance];
     uint seed = b.seed_district_flags_base.x;
     uint district = b.seed_district_flags_base.y;
@@ -56,4 +58,8 @@ void main()
     }
     out_color = vec4(apply_fog(shade_surface(s, p, n, view_dir, ambient), p), 1.0);
     out_material = s.material;
+#ifdef APEX_RT
+    out_albedo = g_rt_albedo;
+    out_material.ba = oct_encode(g_rt_normal);
+#endif
 }
